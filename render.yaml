@@ -1,0 +1,228 @@
+# =============================================================================
+# Render Blueprint — Eckox AI Platform
+# Defines all Render services declaratively.
+# Docs: https://render.com/docs/blueprint-spec
+# =============================================================================
+
+services:
+
+  # ── 1. Laravel API — Web Service ────────────────────────────────────────────
+  - type: web
+    name: eckox-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    region: frankfurt          # eu-central-1 — change to: oregon | ohio | singapore | frankfurt
+    plan: starter              # starter | standard | pro
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: CONTAINER_ROLE
+        value: web
+
+      - key: APP_NAME
+        value: "Eckox AI Platform"
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_URL
+        fromService:
+          type: web
+          name: eckox-backend
+          property: host
+          format: https://{value}
+
+      - key: LOG_CHANNEL
+        value: stderr
+      - key: LOG_LEVEL
+        value: error
+
+      # Database — Supabase (set via Render dashboard)
+      - key: DB_CONNECTION
+        value: pgsql
+      - key: DB_PORT
+        value: "6543"
+      - key: DB_SSLMODE
+        value: require
+      - key: DB_HOST
+        sync: false   # set in dashboard
+      - key: DB_DATABASE
+        value: postgres
+      - key: DB_USERNAME
+        sync: false   # set in dashboard
+      - key: DB_PASSWORD
+        sync: false   # set in dashboard
+
+      # Session / Cache / Queue
+      - key: SESSION_DRIVER
+        value: redis
+      - key: SESSION_LIFETIME
+        value: "120"
+      - key: SESSION_SECURE_COOKIE
+        value: "true"
+      - key: SESSION_SAME_SITE
+        value: lax
+      - key: SESSION_DOMAIN
+        value: .eckox.ai
+      - key: SANCTUM_STATEFUL_DOMAINS
+        value: "eckox.ai,localhost:3000,localhost,127.0.0.1"
+
+      - key: CACHE_STORE
+        value: redis
+      - key: QUEUE_CONNECTION
+        value: redis
+
+      # Redis — Upstash (set via Render dashboard)
+      - key: REDIS_CLIENT
+        value: phpredis
+      - key: REDIS_PORT
+        value: "6379"
+      - key: REDIS_SCHEME
+        value: tls
+      - key: REDIS_HOST
+        sync: false   # set in dashboard
+      - key: REDIS_PASSWORD
+        sync: false   # set in dashboard
+
+      # Laravel App Key
+      - key: APP_KEY
+        generateValue: true
+
+      # AI
+      - key: OPENAI_API_KEY
+        sync: false   # set in dashboard
+      - key: OPENAI_MODEL
+        value: gpt-4o
+
+      # WhatsApp
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false   # set in dashboard
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false   # set in dashboard
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false   # set in dashboard
+      - key: WHATSAPP_BUSINESS_ACCOUNT_ID
+        sync: false   # set in dashboard
+
+      # Mail — Resend
+      - key: MAIL_MAILER
+        value: smtp
+      - key: MAIL_HOST
+        value: smtp.resend.com
+      - key: MAIL_PORT
+        value: "465"
+      - key: MAIL_USERNAME
+        value: resend
+      - key: MAIL_ENCRYPTION
+        value: ssl
+      - key: MAIL_FROM_ADDRESS
+        value: noreply@eckox.ai
+      - key: MAIL_FROM_NAME
+        value: "Eckox AI"
+      - key: MAIL_PASSWORD
+        sync: false   # set in dashboard (Resend API key)
+
+      # Storage — Supabase S3-compatible
+      - key: FILESYSTEM_DISK
+        value: s3
+      - key: AWS_DEFAULT_REGION
+        value: eu-west-1
+      - key: AWS_USE_PATH_STYLE_ENDPOINT
+        value: "true"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_BUCKET
+        sync: false
+      - key: AWS_ENDPOINT
+        sync: false
+
+      - key: BCRYPT_ROUNDS
+        value: "12"
+
+  # ── 2. Queue Worker — Background Worker ─────────────────────────────────────
+  - type: worker
+    name: eckox-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    region: frankfurt
+    plan: starter
+
+    envVars:
+      - key: CONTAINER_ROLE
+        value: worker
+
+      # Inherit all same secrets as the web service
+      - key: APP_NAME
+        value: "Eckox AI Platform"
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: LOG_CHANNEL
+        value: stderr
+      - key: LOG_LEVEL
+        value: error
+      - key: APP_URL
+        value: https://eckox-backend.onrender.com
+
+      - key: DB_CONNECTION
+        value: pgsql
+      - key: DB_PORT
+        value: "6543"
+      - key: DB_SSLMODE
+        value: require
+      - key: DB_HOST
+        sync: false
+      - key: DB_DATABASE
+        value: postgres
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+
+      - key: CACHE_STORE
+        value: redis
+      - key: QUEUE_CONNECTION
+        value: redis
+      - key: REDIS_CLIENT
+        value: phpredis
+      - key: REDIS_PORT
+        value: "6379"
+      - key: REDIS_SCHEME
+        value: tls
+      - key: REDIS_HOST
+        sync: false
+      - key: REDIS_PASSWORD
+        sync: false
+
+      - key: APP_KEY
+        sync: false   # must match web service APP_KEY
+
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: MAIL_MAILER
+        value: smtp
+      - key: MAIL_HOST
+        value: smtp.resend.com
+      - key: MAIL_PORT
+        value: "465"
+      - key: MAIL_USERNAME
+        value: resend
+      - key: MAIL_ENCRYPTION
+        value: ssl
+      - key: MAIL_FROM_ADDRESS
+        value: noreply@eckox.ai
+      - key: MAIL_PASSWORD
+        sync: false
