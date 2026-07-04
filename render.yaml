@@ -167,7 +167,7 @@ services:
       - key: LOG_LEVEL
         value: error
       - key: APP_URL
-        value: https://eckox-backend.onrender.com
+        value: https://eckox-ai-platform.onrender.com
 
       - key: DB_CONNECTION
         value: pgsql
