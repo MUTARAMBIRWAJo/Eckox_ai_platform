@@ -2,25 +2,18 @@
 # =============================================================================
 # Eckox AI Platform — Container Entrypoint (Render-compatible)
 # =============================================================================
-# Fixes applied vs previous version:
-#   - NO set -e: prevents container exit on non-critical startup errors
-#   - Uses envsubst instead of sed for ${PORT} substitution (more reliable)
-#   - Starts php-fpm first, waits until ready, THEN starts nginx
-#   - Worker mode runs queue:work directly without nginx
-# =============================================================================
 
-# ── Resolve PORT ──────────────────────────────────────────────────────────────
+# ── 1. Resolve PORT ───────────────────────────────────────────────────────────
 export PORT="${PORT:-10000}"
 echo "[entrypoint] Container role: ${CONTAINER_ROLE:-web}"
 echo "[entrypoint] Starting on port $PORT"
 
-# ── Generate nginx config from template (web mode only) ───────────────────────
+# ── 2. Generate nginx config from template (web mode only) ───────────────────────
 if [ "${CONTAINER_ROLE}" != "worker" ]; then
     echo "[entrypoint] Generating nginx config for port $PORT..."
-    # envsubst only replaces ${PORT} — leaves other nginx vars untouched
     envsubst '${PORT}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
-    # Quick syntax check before committing to startup
+    # Quick syntax check
     nginx -t 2>&1
     if [ $? -ne 0 ]; then
         echo "[entrypoint] ERROR: nginx config syntax check failed — aborting"
@@ -29,18 +22,35 @@ if [ "${CONTAINER_ROLE}" != "worker" ]; then
     echo "[entrypoint] nginx config OK — will listen on 0.0.0.0:$PORT"
 fi
 
-# ── Laravel bootstrap (best-effort — don't abort on failure) ──────────────────
-echo "[entrypoint] Running Laravel bootstrap..."
-php /var/www/html/artisan storage:link       2>&1 || echo "[entrypoint] storage:link skipped"
-php /var/www/html/artisan config:cache       2>&1 || echo "[entrypoint] config:cache skipped (no DB yet)"
-php /var/www/html/artisan route:cache        2>&1 || echo "[entrypoint] route:cache skipped"
-php /var/www/html/artisan view:cache         2>&1 || echo "[entrypoint] view:cache skipped"
+# ── 3. Force database driver checks and production config sync ─────────────────
+echo "[entrypoint] Clearing configuration caches..."
+php /var/www/html/artisan config:clear 2>&1
+php /var/www/html/artisan cache:clear 2>&1
 
-# ── Database migrations ───────────────────────────────────────────────────────
-echo "[entrypoint] Running migrations..."
-php /var/www/html/artisan migrate --force    2>&1 || echo "[entrypoint] WARNING: Migration failed — check DB connectivity"
+# Force the database driver connection config cache to avoid default sqlite fallbacks
+echo "[entrypoint] Caching Laravel config..."
+php /var/www/html/artisan config:cache 2>&1 || {
+    echo "[entrypoint] ERROR: Configuration cache failed — aborting"
+    exit 1
+}
 
-# ── Hand off to appropriate process ──────────────────────────────────────────
+# ── 4. Database migrations (CRITICAL: Must pass to deploy) ──────────────────────
+echo "[entrypoint] Running database migrations..."
+php /var/www/html/artisan migrate --force 2>&1
+if [ $? -ne 0 ]; then
+    echo "[entrypoint] FATAL ERROR: Database migrations failed! Aborting startup to block deployment."
+    exit 1
+fi
+echo "[entrypoint] Database migrations completed successfully."
+
+# ── 5. Cache remaining Laravel assets ──────────────────────────────────────────
+if [ "${CONTAINER_ROLE}" != "worker" ]; then
+    php /var/www/html/artisan storage:link 2>&1 || true
+    php /var/www/html/artisan route:cache  2>&1 || true
+    php /var/www/html/artisan view:cache   2>&1 || true
+fi
+
+# ── 6. Hand off to process ────────────────────────────────────────────────────
 if [ "${CONTAINER_ROLE}" = "worker" ]; then
     echo "[entrypoint] Starting queue worker (no HTTP server needed)..."
     exec php /var/www/html/artisan queue:work redis \
