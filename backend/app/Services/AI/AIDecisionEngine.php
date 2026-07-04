@@ -13,10 +13,14 @@ use OpenAI\Laravel\Facades\OpenAI;
 
 class AIDecisionEngine
 {
+    /** Maximum tool calls allowed per turn before forced escalation. */
+    private const MAX_TOOL_CALLS = 5;
+
     public function __construct(
         private readonly AIContextBuilderService $contextBuilder,
         private readonly EscalationGuard         $escalationGuard,
         private readonly ResponseGuardrail       $responseGuardrail,
+        private readonly AgentToolService        $agentTools,
     ) {}
 
     /**
@@ -27,16 +31,15 @@ class AIDecisionEngine
         $startedAt = microtime(true);
         $traceId   = (string) Str::uuid();
 
-        $region   = $this->contextBuilder->detectRegion($message->country ?? '');
-        // Redact PII (emails/phones/addresses) from inbound message before sending to LLM
+        $region          = $this->contextBuilder->detectRegion($message->country ?? '');
         $redactedContent = $this->redactPII($message->content);
-        $language = $message->language ?? $this->contextBuilder->detectLanguage($redactedContent);
-        $intent   = $this->contextBuilder->detectIntent($redactedContent);
+        $language        = $message->language ?? $this->contextBuilder->detectLanguage($redactedContent);
+        $intent          = $this->contextBuilder->detectIntent($redactedContent);
 
-        // 1. Retrieval Layer (RAG): direct product specs and regional compliance context
-        $retrievalContext = RetrievalContext::build($redactedContent, $region, $language);
+        // Layer 2 — KB passages ONLY (no product pre-fetch — structured facts come via tool calls)
+        $retrievalContext = RetrievalContext::buildKbOnly($redactedContent, $region, $language);
 
-        // Build conversation history (scrubbed of PII)
+        // Build conversation history (PII-scrubbed)
         $history = $lead
             ? $lead->inboundMessages()
                    ->latest()
@@ -56,9 +59,7 @@ class AIDecisionEngine
             retrievalContextData: $retrievalContext->toLLMContext(),
         );
 
-        // 1a. Prompt-injection pre-screen on RAW inbound text (before any LLM call).
-        //     ResponseGuardrail::detectInjection() is called here so we never send
-        //     injected content to OpenAI at all, including inside EscalationGuard.
+        // 1a. Injection pre-screen BEFORE any LLM call (Layer 4 — Security)
         try {
             $this->responseGuardrail->checkInjectionOnly($message->content, 'inbound');
         } catch (\Throwable $injEx) {
@@ -76,15 +77,16 @@ class AIDecisionEngine
             ]);
         }
 
-        // Run the Escalation Guard (Regex OR LLM)
+        // 1b. EscalationGuard (regex + LLM classification)
         $guardResult = $this->escalationGuard->check($message, $lead, $region);
-
         if ($guardResult['escalate']) {
             return $this->forceEscalation($lead, $traceId, $region, $promptPayload, $startedAt, $guardResult);
         }
 
-        // 2. Call LLM with retry/fallback structures
-        $rawDecision = $this->executeLlmFlowWithFallback($promptPayload, $message, $retrievalContext);
+        // 2. Tool-calling LLM flow with guardrail + fallback
+        $rawDecision = $this->executeLlmFlowWithFallback(
+            $promptPayload, $message, $retrievalContext, $traceId, $region, $lead
+        );
 
         $latencyMs = (int) round((microtime(true) - $startedAt) * 1000);
 
@@ -110,7 +112,6 @@ class AIDecisionEngine
             'response'      => $rawDecision,
         ]);
 
-        // Update lead scoring in CRM
         if ($lead && isset($rawDecision['ai_score'])) {
             $lead->update([
                 'ai_score'        => $rawDecision['ai_score'],
@@ -118,7 +119,6 @@ class AIDecisionEngine
                 'language'        => $language,
                 'last_message_at' => now(),
             ]);
-
             event(new LeadScored($lead, $rawDecision['ai_score'], $region, $traceId));
         }
 
@@ -127,40 +127,52 @@ class AIDecisionEngine
         return $decision;
     }
 
+    // =========================================================================
+    // Tool-calling LLM flow
+    // =========================================================================
+
     /**
-     * Executes the LLM flow and executes programmatic guardrail validation with fallback retry.
+     * Execute LLM flow with tool-calling loop, guardrail validation, and fallback.
      */
     private function executeLlmFlowWithFallback(
         array $promptPayload,
         InboundMessage $message,
-        RetrievalContext $retrievalContext
+        RetrievalContext $retrievalContext,
+        string $traceId,
+        string $region,
+        ?Lead $lead
     ): array {
-        // Attempt 1: Call LLM and validate
-        $rawDecision = $this->callOpenAI($promptPayload, $message);
+        $rawDecision = $this->callOpenAIWithTools($promptPayload, $message, $traceId, $region, $lead);
 
         try {
             $this->responseGuardrail->check($message->content, $rawDecision, $retrievalContext);
             return $rawDecision;
         } catch (\Throwable $e) {
             Log::channel('production')->warning('First guardrail check failed, triggering retry fallback', [
+                'trace_id'   => $traceId,
                 'message_id' => $message->id,
-                'error'      => $e->getMessage()
+                'error'      => $e->getMessage(),
             ]);
 
-            // First Fallback Retry: Restate expected facts clearly in the prompt payload
-            $retryPayload = $promptPayload;
-            $retryPayload['system'] .= "\n\nCRITICAL RETRY WARNING:\nYou previously generated a response that failed guardrail validation: {$e->getMessage()}.\nYou must resolve this. Ensure cited prices, specs, and compliance references match the provided Grounded Retrieval Context verbatim.";
+            $retryPayload            = $promptPayload;
+            $retryPayload['system'] .= "\n\nCRITICAL RETRY WARNING:\nYou previously generated a response that failed guardrail validation: {$e->getMessage()}.\nEnsure cited prices, specs, and compliance references match the tool results you received verbatim.";
 
-            $retryDecision = $this->callOpenAI($retryPayload, $message);
+            $retryDecision = $this->callOpenAIWithTools($retryPayload, $message, $traceId, $region, $lead);
 
             try {
                 $this->responseGuardrail->check($message->content, $retryDecision, $retrievalContext);
                 return $retryDecision;
             } catch (\Throwable $e2) {
-                // Second Fallback: Default to secure pre-defined template response and human escalation
                 Log::channel('production')->error('Second guardrail retry failed, forcing human escalation', [
+                    'trace_id'   => $traceId,
                     'message_id' => $message->id,
-                    'error'      => $e2->getMessage()
+                    'error'      => $e2->getMessage(),
+                ]);
+
+                Log::channel('production')->warning('Guardrail fallback event recorded', [
+                    'trace_id' => $traceId,
+                    'cause'    => $e2->getMessage(),
+                    'region'   => $region,
                 ]);
 
                 return $this->getEscalationResponse('Guardrail violation fallback: ' . $e2->getMessage());
@@ -169,11 +181,21 @@ class AIDecisionEngine
     }
 
     /**
-     * Call OpenAI and parse structured JSON decision with fallback error recovery.
+     * Call OpenAI with tool definitions and run the tool-call dispatch loop.
+     * Structured facts (price, spec, stock) enter ONLY via tool results here.
+     * Max MAX_TOOL_CALLS tool calls per turn; exceeding cap forces escalation.
      */
-    private function callOpenAI(array $promptPayload, InboundMessage $message): array
-    {
+    private function callOpenAIWithTools(
+        array $promptPayload,
+        InboundMessage $message,
+        string $traceId,
+        string $region,
+        ?Lead $lead
+    ): array {
         try {
+            // Build OpenAI tool definitions from AgentToolService registry
+            $tools = $this->buildOpenAIToolDefinitions();
+
             $messages = [
                 ['role' => 'system', 'content' => $promptPayload['system']],
             ];
@@ -187,41 +209,171 @@ class AIDecisionEngine
                 'content' => "Lead context: {$promptPayload['context']}\n\nIncoming message: {$promptPayload['message']}",
             ];
 
-            $response = OpenAI::chat()->create([
-                'model'       => config('openai.model', 'gpt-4o-mini'),
-                'messages'    => $messages,
-                'temperature' => 0.1,
-                'max_tokens'  => 500,
-                'response_format' => ['type' => 'json_object'],
-            ]);
+            $toolCallCount = 0;
 
-            $content = $response->choices[0]->message->content ?? '{}';
-            $decoded = json_decode($content, true);
+            // Tool-calling loop
+            while (true) {
+                $response = OpenAI::chat()->create([
+                    'model'       => config('openai.model', 'gpt-4o-mini'),
+                    'messages'    => $messages,
+                    'temperature' => 0.1,
+                    'max_tokens'  => 800,
+                    'tools'       => $tools,
+                    'tool_choice' => 'auto',
+                ]);
 
-            if (!is_array($decoded) || (!isset($decoded['decision']) && !isset($decoded['reply_text']))) {
-                throw new \RuntimeException('Structured decision key missing in LLM response');
+                $choice      = $response->choices[0];
+                $finishReason = $choice->finishReason ?? 'stop';
+
+                // Append assistant message (may contain tool_calls)
+                $assistantMsg = ['role' => 'assistant'];
+                if (!empty($choice->message->content)) {
+                    $assistantMsg['content'] = $choice->message->content;
+                }
+                $toolCallsRaw = $choice->message->toolCalls ?? [];
+                if (!empty($toolCallsRaw)) {
+                    $assistantMsg['tool_calls'] = array_map(fn ($tc) => [
+                        'id'       => $tc->id,
+                        'type'     => 'function',
+                        'function' => [
+                            'name'      => $tc->function->name,
+                            'arguments' => $tc->function->arguments,
+                        ],
+                    ], $toolCallsRaw);
+                }
+                $messages[] = $assistantMsg;
+
+                // If LLM is done (no more tool calls), parse final response
+                if ($finishReason === 'stop' || empty($toolCallsRaw)) {
+                    $content = $choice->message->content ?? '{}';
+                    $decoded = json_decode($content, true);
+
+                    if (!is_array($decoded) || (!isset($decoded['decision']) && !isset($decoded['reply_text']))) {
+                        throw new \RuntimeException('Structured decision key missing in LLM response');
+                    }
+
+                    if (!isset($decoded['decision'])) {
+                        $decoded['decision'] = 'reply';
+                    }
+
+                    if (!empty($decoded['escalate'])) {
+                        return $this->getEscalationResponse('LLM requested escalation via response flag.');
+                    }
+
+                    return $decoded;
+                }
+
+                // Process tool calls
+                if ($finishReason === 'tool_calls') {
+                    foreach ($toolCallsRaw as $toolCall) {
+                        $toolCallCount++;
+
+                        // Cap check — escalate rather than answer with insufficient data
+                        if ($toolCallCount > self::MAX_TOOL_CALLS) {
+                            Log::channel('production')->warning('Tool-call loop cap exceeded', [
+                                'trace_id'       => $traceId,
+                                'message_id'     => $message->id,
+                                'tool_call_count' => $toolCallCount,
+                            ]);
+                            return $this->getEscalationResponse('Tool-call loop exceeded maximum depth. Escalating to human.');
+                        }
+
+                        $toolName   = $toolCall->function->name;
+                        $toolInputs = json_decode($toolCall->function->arguments, true) ?? [];
+
+                        // Inject lead context into document tools
+                        if (in_array($toolName, ['create_quote_pdf', 'generate_invoice']) && $lead) {
+                            $toolInputs['lead_id'] = $toolInputs['lead_id'] ?? $lead->id;
+                            $toolInputs['region']  = $toolInputs['region']  ?? $region;
+                        }
+                        if ($toolName === 'escalate_to_human') {
+                            $toolInputs['trace_id'] = $traceId;
+                            $toolInputs['lead_id']  = $toolInputs['lead_id'] ?? $lead?->id;
+                        }
+
+                        // Dispatch through AgentToolService (all fact sourcing happens here)
+                        try {
+                            $toolResult = $this->agentTools->dispatch($toolName, $toolInputs, $traceId);
+                        } catch (\InvalidArgumentException $toolEx) {
+                            $toolResult = ['error' => $toolEx->getMessage()];
+                            Log::channel('production')->error('Tool dispatch error', [
+                                'trace_id' => $traceId,
+                                'tool'     => $toolName,
+                                'error'    => $toolEx->getMessage(),
+                            ]);
+                        }
+
+                        // Return tool result to LLM as tool message
+                        $messages[] = [
+                            'role'         => 'tool',
+                            'tool_call_id' => $toolCall->id,
+                            'content'      => json_encode($toolResult),
+                        ];
+
+                        // If the tool itself requested escalation, honour it immediately
+                        if ($toolName === 'escalate_to_human' && ($toolResult['escalated'] ?? false)) {
+                            return $this->getEscalationResponse($toolResult['reason'] ?? 'Tool-initiated escalation.');
+                        }
+                    }
+                }
             }
-
-            // Map reply_text key to reply representation
-            if (!isset($decoded['decision'])) {
-                $decoded['decision'] = 'reply';
-            }
-
-            // If LLM returned an explicit escalation field flag, conform it
-            if (!empty($decoded['escalate'])) {
-                return $this->getEscalationResponse('Escalated directly by decision agent payload instructions.');
-            }
-
-            return $decoded;
-
         } catch (\Throwable $e) {
-            Log::channel('production')->error('AI decision LLM call crashed. Defaulting to escalation.', [
+            Log::channel('production')->error('AI tool-calling LLM flow crashed. Defaulting to escalation.', [
                 'message_id' => $message->id,
                 'error'      => $e->getMessage(),
             ]);
 
             return $this->getEscalationResponse('Fail-safe recovery fallback activated: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Build OpenAI-compatible function definitions from AgentToolService::TOOL_DEFINITIONS.
+     * Converts our simple registry format to the OpenAI tools schema.
+     */
+    private function buildOpenAIToolDefinitions(): array
+    {
+        $parameterSchemas = [
+            'get_product_price'  => ['sku' => 'string', 'region' => 'string'],
+            'check_stock'        => ['sku' => 'string'],
+            'get_product_spec'   => ['sku' => 'string'],
+            'get_compliance_doc' => ['region' => 'string', 'doc_type' => 'string'],
+            'create_quote_pdf'   => ['lead_id' => 'integer', 'sku' => 'string', 'region' => 'string', 'quantity' => 'integer'],
+            'generate_invoice'   => ['lead_id' => 'integer', 'sku' => 'string', 'region' => 'string', 'quantity' => 'integer'],
+            'escalate_to_human'  => ['reason' => 'string'],
+        ];
+
+        $required = [
+            'get_product_price'  => ['sku', 'region'],
+            'check_stock'        => ['sku'],
+            'get_product_spec'   => ['sku'],
+            'get_compliance_doc' => ['region', 'doc_type'],
+            'create_quote_pdf'   => ['sku', 'region', 'quantity'],
+            'generate_invoice'   => ['sku', 'region', 'quantity'],
+            'escalate_to_human'  => ['reason'],
+        ];
+
+        return array_map(function ($tool) use ($parameterSchemas, $required) {
+            $name       = $tool['name'];
+            $properties = [];
+
+            foreach (($parameterSchemas[$name] ?? []) as $param => $type) {
+                $properties[$param] = ['type' => $type];
+            }
+
+            return [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => $name,
+                    'description' => $tool['description'],
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => $properties,
+                        'required'   => $required[$name] ?? [],
+                    ],
+                ],
+            ];
+        }, AgentToolService::TOOL_DEFINITIONS);
     }
 
     /**
@@ -286,10 +438,9 @@ class AIDecisionEngine
      */
     private function redactPII(string $text): string
     {
-        // Redact email structures
         $text = preg_replace('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', '[REDACTED_EMAIL]', $text);
-        // Redact standard E.164 phone formats
-        $text = preg_replace('/\(?\+?[0-9]{1,3}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/', '[REDACTED_PHONE]', $text);
+        // Robust international phone regex supporting area codes, country codes, spaces/dashes/parentheses
+        $text = preg_replace('/(?:\+?\d{1,4}[-.\s]?)?\(?\d{1,4}\)?(?:[-.\s]?\d{1,4}){3,6}/', '[REDACTED_PHONE]', $text);
 
         return $text;
     }

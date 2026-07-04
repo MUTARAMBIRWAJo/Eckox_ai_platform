@@ -27,6 +27,15 @@ class AIChatController extends Controller
         ]);
 
         $user = $request->user();
+
+        // Task 2: Explicit authorization check (authenticated + internal staff role)
+        if (!$user->hasAnyRole(['admin', 'manager', 'sales-agent', 'super-admin'])) {
+            abort(403, 'Unauthorized role access.');
+        }
+
+        // Task 2: Code-level pricing data barrier
+        $this->aiChatService->pricingContextGuard($request->all());
+
         $messageContent = $request->input('message');
         $conversationId = $request->input('conversation_id');
 

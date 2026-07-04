@@ -2,6 +2,7 @@
 
 namespace App\Services\AI;
 
+use App\Models\Product;
 use Illuminate\Support\Facades\Log;
 
 class ResponseGuardrail
@@ -46,25 +47,40 @@ class ResponseGuardrail
                 continue;
             }
 
-            // Cross-reference against RetrievalContext products
-            $matched = false;
-            foreach ($context->products as $p) {
-                if ($field === 'price') {
-                    $expected = $context->region === 'europe' ? $p['price_eur'] : $p['price_usd'];
-                    if (abs((float)$value - (float)$expected) < 0.01) {
-                        $matched = true;
-                        break;
-                    }
-                } elseif (isset($p[$field])) {
-                    if (mb_strtolower((string)$p[$field]) === mb_strtolower((string)$value)) {
-                        $matched = true;
-                        break;
-                    }
-                }
+            // Robust validation: look up the product in the DB directly based on cited source/context
+            $product = null;
+            if (str_starts_with($source, 'product:')) {
+                $sku = substr($source, 8);
+                $product = Product::where('sku', $sku)->first();
             }
 
-            if (!$matched && !empty($context->products)) {
-                throw new \RuntimeException("Factual validation mismatch: Citied field [{$field}] with value [{$value}] does not match source context record.");
+            if (!$product) {
+                // Fallback: search by matching SKU or name in the source string or the user input
+                $product = Product::all()->first(function (Product $p) use ($source, $inboundText) {
+                    return str_contains(strtolower($source), strtolower($p->sku)) ||
+                           str_contains(strtolower($inboundText), strtolower($p->sku)) ||
+                           str_contains(strtolower($inboundText), strtolower($p->name));
+                });
+            }
+
+            if ($product) {
+                $matched = false;
+                if ($field === 'price') {
+                    $expected = $context->region === 'europe' ? $product->price_eur : $product->price_usd;
+                    if (abs((float)$value - (float)$expected) < 0.01) {
+                        $matched = true;
+                    }
+                } elseif (isset($product->$field)) {
+                    if (mb_strtolower((string)$product->$field) === mb_strtolower((string)$value)) {
+                        $matched = true;
+                    }
+                }
+
+                if (!$matched) {
+                    throw new \RuntimeException("Factual validation mismatch: Citied field [{$field}] with value [{$value}] does not match source context record.");
+                }
+            } else {
+                throw new \RuntimeException("Factual validation mismatch: Cited product source [{$source}] not found in database.");
             }
         }
 
