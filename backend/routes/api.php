@@ -1,5 +1,24 @@
 <?php
 
+// ── Health check endpoint (public - used by Fly.io health checks) ─────────────
+Route::get('/health', function () {
+    try {
+        \Illuminate\Support\Facades\DB::connection()->getPdo();
+        $db = 'connected';
+    } catch (\Exception $e) {
+        $db = 'disconnected: ' . $e->getMessage();
+    }
+    $status = str_contains($db, 'connected') ? 'ok' : 'degraded';
+    $code   = $status === 'ok' ? 200 : 500;
+    return response()->json([
+        'status'    => $status,
+        'database'  => $db,
+        'timestamp' => now()->toISOString(),
+        'app'       => config('app.name'),
+    ], $code);
+});
+
+
 use App\Http\Controllers\Api\AIChatController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EmailWebhookController;

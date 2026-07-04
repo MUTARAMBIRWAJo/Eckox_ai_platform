@@ -1,0 +1,46 @@
+# Fly.io configuration for Eckox AI Platform - Laravel API
+app = "eckox-backend"
+primary_region = "cdg"  # Paris/Europe - change to: lhr=London, ams=Amsterdam, fra=Frankfurt
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  APP_ENV          = "production"
+  APP_DEBUG        = "false"
+  LOG_CHANNEL      = "stderr"
+  LOG_LEVEL        = "error"
+  APP_URL          = "https://eckox-backend.fly.dev"
+  SESSION_DRIVER   = "redis"
+  CACHE_STORE      = "redis"
+  QUEUE_CONNECTION = "redis"
+  DB_CONNECTION    = "pgsql"
+  DB_PORT          = "6543"
+  DB_SSLMODE       = "require"
+
+[http_service]
+  internal_port        = 8080
+  force_https          = true
+  auto_stop_machines   = false
+  auto_start_machines  = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type       = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[vm]]
+  memory   = "512mb"
+  cpu_kind = "shared"
+  cpus     = 1
+
+[checks]
+  [checks.health]
+    grace_period = "10s"
+    interval     = "30s"
+    method       = "GET"
+    path         = "/api/health"
+    protocol     = "http"
+    timeout      = "5s"
+    type         = "http"

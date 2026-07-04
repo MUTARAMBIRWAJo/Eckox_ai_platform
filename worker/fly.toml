@@ -1,0 +1,28 @@
+# Fly.io configuration for Eckox AI Platform - Queue Worker
+app = "eckox-worker"
+primary_region = "cdg"
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  APP_ENV          = "production"
+  APP_DEBUG        = "false"
+  LOG_CHANNEL      = "stderr"
+  LOG_LEVEL        = "error"
+  APP_URL          = "https://eckox-backend.fly.dev"
+  SESSION_DRIVER   = "redis"
+  CACHE_STORE      = "redis"
+  QUEUE_CONNECTION = "redis"
+  DB_CONNECTION    = "pgsql"
+  DB_PORT          = "6543"
+  DB_SSLMODE       = "require"
+
+[processes]
+  app = "php artisan queue:work redis --sleep=3 --tries=3 --timeout=120 --max-jobs=1000 --max-time=3600"
+
+# No HTTP service - this is a pure worker
+[[vm]]
+  memory   = "512mb"
+  cpu_kind = "shared"
+  cpus     = 1
