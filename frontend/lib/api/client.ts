@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosInstance, AxiosError } from 'axios';
 
 // API response wrapper format
 export interface APIResponse<T> {
@@ -12,14 +12,14 @@ export interface APIResponse<T> {
 class APIClient {
   private client: AxiosInstance;
   private baseURL: string;
-  private authToken: string | null = null;
 
   constructor() {
-    this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+    // Dynamic loading of NEXT_PUBLIC_API_URL, fallback only used if undefined
+    this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://eckox-ai-platform.onrender.com/api';
 
     this.client = axios.create({
       baseURL: this.baseURL,
-      timeout: 15000,
+      timeout: 30000,
       withCredentials: true,
       headers: {
         'Content-Type': 'application/json',
