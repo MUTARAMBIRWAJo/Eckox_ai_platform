@@ -1,0 +1,7 @@
+/vendor
+/bootstrap/cache/*.php
+.env
+.git
+.github
+tests
+/node_modules
