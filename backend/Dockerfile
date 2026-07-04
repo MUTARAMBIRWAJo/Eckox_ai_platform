@@ -1,21 +1,21 @@
 # =============================================================================
 # Eckox AI Platform — Production Dockerfile (Render-compatible)
 # Multi-stage: composer builder → nginx + php-fpm runner
-# Port: injected by Render via $PORT env variable at runtime
+# HTTP: nginx listens on ${PORT:-10000}, proxies to php-fpm on 127.0.0.1:9000
 # =============================================================================
 
-# ── Stage 1: Build — install composer deps & generate autoloader ──────────────
-FROM php:8.4-fpm-alpine AS composer-builder
+# ── Stage 1: Build ────────────────────────────────────────────────────────────
+FROM php:8.4-fpm-alpine AS builder
 
 WORKDIR /app
 
-# Install build-time system dependencies
+# Build-time system deps
 RUN apk add --no-cache \
     git curl unzip zip \
     libzip-dev libpng-dev libjpeg-turbo-dev freetype-dev \
     postgresql-dev icu-dev linux-headers bash
 
-# Install PHP extensions
+# PHP extensions
 RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
     && pecl install redis \
     && docker-php-ext-enable redis \
@@ -24,48 +24,45 @@ RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
     && docker-php-ext-install -j$(nproc) \
        gd pdo pdo_pgsql zip bcmath sockets opcache intl
 
-# Install Composer
+# Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Copy dependency definitions first (layer caching)
+# Dependency layer cache
 COPY composer.json composer.lock ./
-
-# Install production dependencies (no scripts/autoload yet)
 RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
 
-# Copy full application source
+# Full application
 COPY . .
 
-# Clear dev bootstrap cache files
+# Clear any dev bootstrap cache
 RUN rm -f bootstrap/cache/packages.php \
            bootstrap/cache/services.php \
            bootstrap/cache/config.php \
            bootstrap/cache/routes.php
 
-# Override with production-hardened config files
-# (ensures pgBouncer compatibility is baked in)
+# Production hardened config overrides
 COPY config/database.php config/database.php
 COPY config/services.php config/services.php
 
-# Generate optimised autoloader
+# Optimised autoloader
 RUN composer dump-autoload --no-dev --optimize
 
-# ── Stage 2: Production runner — nginx + php-fpm + supervisor ─────────────────
-FROM php:8.4-fpm-alpine AS runner
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+FROM php:8.4-fpm-alpine AS runtime
 
 WORKDIR /var/www/html
 
-# Install runtime dependencies (nginx + supervisor for process management)
+# Runtime deps: nginx + supervisor + envsubst (gettext)
 RUN apk add --no-cache \
     nginx supervisor gettext \
     libzip libpng libjpeg-turbo freetype libpq \
-    icu-libs shadow su-exec fcgi curl
+    icu-libs fcgi curl bash
 
-# Copy PHP extensions from builder stage
-COPY --from=composer-builder /usr/local/lib/php/extensions /usr/local/lib/php/extensions
-COPY --from=composer-builder /usr/local/etc/php/conf.d     /usr/local/etc/php/conf.d
+# Copy PHP extensions from builder
+COPY --from=builder /usr/local/lib/php/extensions /usr/local/lib/php/extensions
+COPY --from=builder /usr/local/etc/php/conf.d     /usr/local/etc/php/conf.d
 
-# Production OPcache configuration
+# OPcache — production settings
 RUN { \
     echo "opcache.enable=1"; \
     echo "opcache.memory_consumption=256"; \
@@ -76,36 +73,41 @@ RUN { \
     echo "opcache.fast_shutdown=1"; \
 } >> /usr/local/etc/php/conf.d/docker-php-ext-opcache.ini
 
-# Copy built application from composer-builder
-COPY --from=composer-builder /app /var/www/html
+# PHP-FPM: listen on TCP 9000 (not unix socket) for nginx compatibility
+# Run as www-data
+RUN sed -i \
+    -e 's|listen = 9000|listen = 127.0.0.1:9000|g' \
+    -e 's/;listen.owner = www-data/listen.owner = www-data/' \
+    -e 's/;listen.group = www-data/listen.group = www-data/' \
+    -e 's/pm.max_children = 5/pm.max_children = 20/' \
+    -e 's/pm.start_servers = 2/pm.start_servers = 4/' \
+    -e 's/pm.min_spare_servers = 1/pm.min_spare_servers = 2/' \
+    -e 's/pm.max_spare_servers = 3/pm.max_spare_servers = 6/' \
+    /usr/local/etc/php-fpm.d/www.conf
 
-# Copy Render-specific config files
-# nginx config uses __PORT__ placeholder — substituted at runtime by entrypoint.sh
+# Remove Alpine nginx default configs that conflict on port 80
+RUN rm -rf /etc/nginx/http.d /etc/nginx/conf.d
+
+# Copy application
+COPY --from=builder /app /var/www/html
+
+# Copy runtime config files
 COPY docker/nginx-render.conf   /etc/nginx/nginx.conf.template
 COPY docker/supervisord.conf    /etc/supervisor/conf.d/supervisord.conf
 COPY docker/entrypoint.sh       /entrypoint.sh
-
 RUN chmod +x /entrypoint.sh
 
-# Set storage & cache directory permissions
+# Ensure correct storage permissions
 RUN mkdir -p \
-    storage/framework/sessions \
-    storage/framework/views \
-    storage/framework/cache/data \
-    storage/logs \
-    bootstrap/cache \
-    && chown -R www-data:www-data storage bootstrap/cache \
+        storage/framework/sessions \
+        storage/framework/views \
+        storage/framework/cache/data \
+        storage/logs \
+        bootstrap/cache \
+    && chown -R www-data:www-data /var/www/html \
     && chmod -R 775 storage bootstrap/cache
 
-# Tune PHP-FPM pool for production load
-RUN sed -i \
-    -e 's/pm.max_children = 5/pm.max_children = 50/' \
-    -e 's/pm.start_servers = 2/pm.start_servers = 10/' \
-    -e 's/pm.min_spare_servers = 1/pm.min_spare_servers = 5/' \
-    -e 's/pm.max_spare_servers = 3/pm.max_spare_servers = 15/' \
-    /usr/local/etc/php-fpm.d/www.conf
-
-# Render injects $PORT — we expose the default fallback for documentation
+# Document default port (Render overrides via $PORT env)
 EXPOSE 10000
 
 ENTRYPOINT ["/entrypoint.sh"]
