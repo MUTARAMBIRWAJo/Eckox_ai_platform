@@ -34,7 +34,7 @@ php /var/www/html/artisan config:cache 2>&1 || {
     exit 1
 }
 
-# ── 4. Database migrations (CRITICAL: Must pass to deploy) ──────────────────────
+# ── 4. Database migrations & seeding (CRITICAL: Must pass to deploy) ───────────
 echo "[entrypoint] Running database migrations..."
 php /var/www/html/artisan migrate --force 2>&1
 if [ $? -ne 0 ]; then
@@ -42,6 +42,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 echo "[entrypoint] Database migrations completed successfully."
+
+# Seed database securely in production environment
+echo "[entrypoint] Seeding database..."
+php /var/www/html/artisan db:seed --force 2>&1 || {
+    echo "[entrypoint] WARNING: Database seeding failed or skipped."
+}
 
 # ── 5. Cache remaining Laravel assets ──────────────────────────────────────────
 if [ "${CONTAINER_ROLE}" != "worker" ]; then
