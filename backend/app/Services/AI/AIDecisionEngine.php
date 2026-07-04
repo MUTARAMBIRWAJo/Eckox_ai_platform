@@ -16,6 +16,7 @@ class AIDecisionEngine
     public function __construct(
         private readonly AIContextBuilderService $contextBuilder,
         private readonly EscalationGuard         $escalationGuard,
+        private readonly ResponseGuardrail       $responseGuardrail,
     ) {}
 
     /**
@@ -27,37 +28,63 @@ class AIDecisionEngine
         $traceId   = (string) Str::uuid();
 
         $region   = $this->contextBuilder->detectRegion($message->country ?? '');
-        $language = $message->language ?? $this->contextBuilder->detectLanguage($message->content);
-        $intent   = $this->contextBuilder->detectIntent($message->content);
+        // Redact PII (emails/phones/addresses) from inbound message before sending to LLM
+        $redactedContent = $this->redactPII($message->content);
+        $language = $message->language ?? $this->contextBuilder->detectLanguage($redactedContent);
+        $intent   = $this->contextBuilder->detectIntent($redactedContent);
 
-        // Build conversation history from prior inbound messages for this lead
+        // 1. Retrieval Layer (RAG): direct product specs and regional compliance context
+        $retrievalContext = RetrievalContext::build($redactedContent, $region, $language);
+
+        // Build conversation history (scrubbed of PII)
         $history = $lead
             ? $lead->inboundMessages()
                    ->latest()
                    ->take(10)
                    ->get()
-                   ->map(fn ($m) => ['role' => 'user', 'content' => $m->content])
+                   ->map(fn ($m) => ['role' => 'user', 'content' => $this->redactPII($m->content)])
                    ->toArray()
             : [];
 
         $promptPayload = $this->contextBuilder->buildPrompt(
-            region:              $region,
-            language:            $language,
-            content:             $message->content,
-            intent:              $intent,
-            conversationHistory: $history,
-            lead:                $lead,
+            region:               $region,
+            language:             $language,
+            content:              $redactedContent,
+            intent:               $intent,
+            conversationHistory:  $history,
+            lead:                 $lead,
+            retrievalContextData: $retrievalContext->toLLMContext(),
         );
 
-        // 1. Run the Escalation Guard (Regex OR LLM)
+        // 1a. Prompt-injection pre-screen on RAW inbound text (before any LLM call).
+        //     ResponseGuardrail::detectInjection() is called here so we never send
+        //     injected content to OpenAI at all, including inside EscalationGuard.
+        try {
+            $this->responseGuardrail->checkInjectionOnly($message->content, 'inbound');
+        } catch (\Throwable $injEx) {
+            Log::channel('production')->warning('Prompt injection detected — immediate escalation', [
+                'trace_id'   => $traceId,
+                'message_id' => $message->id,
+                'reason'     => $injEx->getMessage(),
+            ]);
+
+            return $this->forceEscalation($lead, $traceId, $region, $promptPayload, $startedAt, [
+                'escalate'   => true,
+                'reason'     => 'Injection detected: ' . $injEx->getMessage(),
+                'confidence' => 1.0,
+                'intent'     => 'complaint_legal',
+            ]);
+        }
+
+        // Run the Escalation Guard (Regex OR LLM)
         $guardResult = $this->escalationGuard->check($message, $lead, $region);
 
         if ($guardResult['escalate']) {
             return $this->forceEscalation($lead, $traceId, $region, $promptPayload, $startedAt, $guardResult);
         }
 
-        // 2. Call LLM for B2B reply decision with structured try/catch parsing safety
-        $rawDecision = $this->callOpenAI($promptPayload, $message);
+        // 2. Call LLM with retry/fallback structures
+        $rawDecision = $this->executeLlmFlowWithFallback($promptPayload, $message, $retrievalContext);
 
         $latencyMs = (int) round((microtime(true) - $startedAt) * 1000);
 
@@ -101,6 +128,47 @@ class AIDecisionEngine
     }
 
     /**
+     * Executes the LLM flow and executes programmatic guardrail validation with fallback retry.
+     */
+    private function executeLlmFlowWithFallback(
+        array $promptPayload,
+        InboundMessage $message,
+        RetrievalContext $retrievalContext
+    ): array {
+        // Attempt 1: Call LLM and validate
+        $rawDecision = $this->callOpenAI($promptPayload, $message);
+
+        try {
+            $this->responseGuardrail->check($message->content, $rawDecision, $retrievalContext);
+            return $rawDecision;
+        } catch (\Throwable $e) {
+            Log::channel('production')->warning('First guardrail check failed, triggering retry fallback', [
+                'message_id' => $message->id,
+                'error'      => $e->getMessage()
+            ]);
+
+            // First Fallback Retry: Restate expected facts clearly in the prompt payload
+            $retryPayload = $promptPayload;
+            $retryPayload['system'] .= "\n\nCRITICAL RETRY WARNING:\nYou previously generated a response that failed guardrail validation: {$e->getMessage()}.\nYou must resolve this. Ensure cited prices, specs, and compliance references match the provided Grounded Retrieval Context verbatim.";
+
+            $retryDecision = $this->callOpenAI($retryPayload, $message);
+
+            try {
+                $this->responseGuardrail->check($message->content, $retryDecision, $retrievalContext);
+                return $retryDecision;
+            } catch (\Throwable $e2) {
+                // Second Fallback: Default to secure pre-defined template response and human escalation
+                Log::channel('production')->error('Second guardrail retry failed, forcing human escalation', [
+                    'message_id' => $message->id,
+                    'error'      => $e2->getMessage()
+                ]);
+
+                return $this->getEscalationResponse('Guardrail violation fallback: ' . $e2->getMessage());
+            }
+        }
+    }
+
+    /**
      * Call OpenAI and parse structured JSON decision with fallback error recovery.
      */
     private function callOpenAI(array $promptPayload, InboundMessage $message): array
@@ -122,7 +190,7 @@ class AIDecisionEngine
             $response = OpenAI::chat()->create([
                 'model'       => config('openai.model', 'gpt-4o-mini'),
                 'messages'    => $messages,
-                'temperature' => 0.3,
+                'temperature' => 0.1,
                 'max_tokens'  => 500,
                 'response_format' => ['type' => 'json_object'],
             ]);
@@ -130,8 +198,13 @@ class AIDecisionEngine
             $content = $response->choices[0]->message->content ?? '{}';
             $decoded = json_decode($content, true);
 
-            if (!is_array($decoded) || !isset($decoded['decision'])) {
+            if (!is_array($decoded) || (!isset($decoded['decision']) && !isset($decoded['reply_text']))) {
                 throw new \RuntimeException('Structured decision key missing in LLM response');
+            }
+
+            // Map reply_text key to reply representation
+            if (!isset($decoded['decision'])) {
+                $decoded['decision'] = 'reply';
             }
 
             // If LLM returned an explicit escalation field flag, conform it
@@ -160,11 +233,12 @@ class AIDecisionEngine
             'intent'            => 'complaint_legal',
             'decision'          => 'escalate',
             'confidence'        => 1.0,
-            'reply'             => 'Your request has been routed to our manager. A representative will contact you shortly.',
+            'reply_text'        => 'Let me confirm this with our team and follow up shortly.',
             'document_required' => null,
             'escalate'          => true,
             'ai_score'          => 'warm',
-            'reason'            => $reason
+            'reason'            => $reason,
+            'cited_facts'       => [],
         ];
     }
 
@@ -205,5 +279,18 @@ class AIDecisionEngine
         event(new AIDecisionGenerated($decision));
 
         return $decision;
+    }
+
+    /**
+     * Scrub PII from input texts (emails, phones).
+     */
+    private function redactPII(string $text): string
+    {
+        // Redact email structures
+        $text = preg_replace('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', '[REDACTED_EMAIL]', $text);
+        // Redact standard E.164 phone formats
+        $text = preg_replace('/\(?\+?[0-9]{1,3}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/', '[REDACTED_PHONE]', $text);
+
+        return $text;
     }
 }

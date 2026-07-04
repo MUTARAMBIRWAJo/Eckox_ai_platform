@@ -48,7 +48,6 @@ RULES;
 
     /**
      * Detect language from message content using simple heuristics.
-     * In production this should be replaced with a language detection library.
      */
     public function detectLanguage(string $content): string
     {
@@ -100,7 +99,7 @@ RULES;
     }
 
     /**
-     * Build the full structured prompt for the AI decision engine.
+     * Build the full structured prompt for the AI decision engine grounded strictly in RetrievalContext.
      */
     public function buildPrompt(
         string $region,
@@ -109,6 +108,7 @@ RULES;
         string $intent,
         array  $conversationHistory = [],
         ?Lead  $lead = null,
+        ?array $retrievalContextData = null,
     ): array {
         $regionRules = $region === 'europe' ? self::EUROPE_RULES : self::AFRICA_RULES;
         $currency    = $region === 'europe' ? 'EUR' : 'USD';
@@ -116,8 +116,9 @@ RULES;
 
         $historyText = $this->formatHistory($conversationHistory);
 
+        // Scrub lead name & email for privacy validation layers (GDPR)
         $leadContext = $lead
-            ? "Lead: {$lead->name} | Email: {$lead->email} | Status: {$lead->status} | Score: {$lead->ai_score}"
+            ? "Lead ID: {$lead->id} | Status: {$lead->status} | Score: {$lead->ai_score}"
             : 'Lead: Unknown — inbound from channel';
 
         $systemPrompt = <<<SYSTEM
@@ -126,19 +127,29 @@ Your job is to qualify leads and drive them toward a purchase decision.
 
 {$regionRules}
 
+NO-HALLUCINATION GROUND RULE:
+- You must ONLY state prices, specs, delivery dates, or compliance claims that appear verbatim in the provided Grounded Retrieval Context.
+- If the required answer is not present in the Grounded Retrieval Context, you MUST output a reply stating you will check and follow up shortly. Do NOT guess or invent facts.
+
+GROUNDED RETRIEVAL CONTEXT:
+{$this->formatGroundedContext($retrievalContextData)}
+
 CRITICAL OUTPUT RULES:
 - You NEVER send messages directly. You return a JSON decision object ONLY.
-- Keep reply text under 40 words.
+- Keep reply_text under 40 words.
 - If deal value > 100,000 {$currency} → set escalate = true.
 - If legal complaint detected → set escalate = true immediately.
 - Respond in language: {$language}
 
-OUTPUT FORMAT (MANDATORY — return ONLY this JSON, no extra text):
+OUTPUT FORMAT (MANDATORY — return ONLY this JSON structure, no markdown packaging or extra text):
 {
   "intent": "<detected_intent>",
   "decision": "<reply|generate_quote|generate_invoice|escalate|ask_clarification>",
   "confidence": <0.0-1.0>,
-  "reply": "<max 40 word reply in {$language}>",
+  "reply_text": "<max 40 word reply in {$language}>",
+  "cited_facts": [
+     {"field": "<price|spec_processor|spec_ram|spec_storage>", "value": "<the factual claim value>", "source": "product:<product_sku> or passage:<id>"}
+  ],
   "document_required": "<null|quote|invoice|certificate>",
   "escalate": <true|false>,
   "currency": "{$currency}",
@@ -155,6 +166,15 @@ SYSTEM;
             'message' => $content,
             'intent'  => $intent,
         ];
+    }
+
+    private function formatGroundedContext(?array $contextData): string
+    {
+        if (empty($contextData)) {
+            return "No grounded context available.";
+        }
+
+        return json_encode($contextData, JSON_PRETTY_PRINT);
     }
 
     private function formatHistory(array $history): string

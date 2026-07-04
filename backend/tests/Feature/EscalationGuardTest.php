@@ -161,7 +161,7 @@ class EscalationGuardTest extends TestCase
                                 'intent' => 'buy_intent',
                                 'decision' => 'reply',
                                 'confidence' => 0.9,
-                                'reply' => 'Hello, pricing starts at 50 USD.',
+                                'reply_text' => 'Hello, pricing starts at 50 USD.',
                                 'document_required' => null,
                                 'escalate' => false,
                                 'currency' => 'USD',
