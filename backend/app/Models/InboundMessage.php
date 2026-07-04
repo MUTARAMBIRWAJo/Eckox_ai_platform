@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Str;
 
 class InboundMessage extends Model
 {
@@ -18,6 +19,15 @@ class InboundMessage extends Model
     protected $casts = [
         'metadata' => 'array',
     ];
+
+    protected static function booted(): void
+    {
+        static::creating(function (InboundMessage $message) {
+            if (empty($message->id)) {
+                $message->id = (string) Str::uuid();
+            }
+        });
+    }
 
     public function lead(): BelongsTo
     {

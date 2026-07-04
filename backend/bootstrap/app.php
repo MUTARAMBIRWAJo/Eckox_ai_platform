@@ -13,6 +13,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Enforce PreviewCorsMiddleware runs before the default Laravel CORS stack (HandleCors)
+        $middleware->prepend(\App\Http\Middleware\PreviewCorsMiddleware::class);
+
         $middleware->append(\App\Http\Middleware\TraceMiddleware::class);
         $middleware->append(\App\Http\Middleware\PerformanceMonitorMiddleware::class);
 

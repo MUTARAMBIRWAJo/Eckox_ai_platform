@@ -89,16 +89,19 @@ class DocumentGenerationEngine
         $pdf      = Pdf::loadHTML($html)->setPaper('a4', 'portrait');
         $filename = "documents/{$lead->id}/{$type}_" . now()->format('Ymd_His') . ".pdf";
 
-        Storage::disk('local')->put($filename, $pdf->output());
+        // Store generated PDF directly in S3 cloud storage for persistence across restarts
+        Storage::disk('s3')->put($filename, $pdf->output());
 
-        $fileUrl = Storage::disk('local')->path($filename);
+        // Get public HTTP URL from S3 driver (do not use path() which refers to the local filesystem)
+        $fileUrl = Storage::disk('s3')->url($filename);
 
-        Log::channel('production')->info('Document generated', [
+        Log::channel('production')->info('Document generated and stored on S3', [
             'type'     => $type,
             'region'   => $region,
             'lead_id'  => $lead->id,
             'trace_id' => $traceId,
             'file'     => $filename,
+            'url'      => $fileUrl,
         ]);
 
         return Document::create([

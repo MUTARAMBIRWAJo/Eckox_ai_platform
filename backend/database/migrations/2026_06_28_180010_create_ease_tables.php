@@ -36,8 +36,13 @@ return new class extends Migration
         // 2. Create inbound_messages
         if (!Schema::hasTable('inbound_messages')) {
             Schema::create('inbound_messages', function (Blueprint $table) {
-                $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
-                $table->uuid('lead_id')->nullable();
+                // SQLite doesn't support gen_random_uuid(). Handle compatibly.
+                if (config('database.default') === 'sqlite') {
+                    $table->uuid('id')->primary();
+                } else {
+                    $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
+                }
+                $table->unsignedBigInteger('lead_id')->nullable();
                 $table->string('channel', 50); // 'whatsapp', 'email'
                 $table->text('sender');
                 $table->text('content');
@@ -53,8 +58,12 @@ return new class extends Migration
         // 3. Create ai_decisions
         if (!Schema::hasTable('ai_decisions')) {
             Schema::create('ai_decisions', function (Blueprint $table) {
-                $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
-                $table->uuid('lead_id')->nullable();
+                if (config('database.default') === 'sqlite') {
+                    $table->uuid('id')->primary();
+                } else {
+                    $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
+                }
+                $table->unsignedBigInteger('lead_id')->nullable();
                 $table->uuid('trace_id')->index();
                 $table->string('intent', 100)->nullable();
                 $table->string('region', 50)->nullable();
@@ -69,8 +78,12 @@ return new class extends Migration
         // 4. Create outbound_messages
         if (!Schema::hasTable('outbound_messages')) {
             Schema::create('outbound_messages', function (Blueprint $table) {
-                $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
-                $table->uuid('lead_id')->nullable();
+                if (config('database.default') === 'sqlite') {
+                    $table->uuid('id')->primary();
+                } else {
+                    $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
+                }
+                $table->unsignedBigInteger('lead_id')->nullable();
                 $table->string('channel', 50);
                 $table->text('recipient');
                 $table->text('content');
@@ -83,8 +96,12 @@ return new class extends Migration
         // 5. Create documents
         if (!Schema::hasTable('documents')) {
             Schema::create('documents', function (Blueprint $table) {
-                $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
-                $table->uuid('lead_id')->nullable();
+                if (config('database.default') === 'sqlite') {
+                    $table->uuid('id')->primary();
+                } else {
+                    $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
+                }
+                $table->unsignedBigInteger('lead_id')->nullable();
                 $table->string('type', 50); // 'quote', 'invoice', 'certificate'
                 $table->text('file_url');
                 $table->string('currency', 10)->nullable();

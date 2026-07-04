@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Str;
 
 class AiDecision extends Model
 {
@@ -20,6 +21,15 @@ class AiDecision extends Model
         'response'   => 'array',
         'confidence' => 'double',
     ];
+
+    protected static function booted(): void
+    {
+        static::creating(function (AiDecision $decision) {
+            if (empty($decision->id)) {
+                $decision->id = (string) Str::uuid();
+            }
+        });
+    }
 
     public function lead(): BelongsTo
     {

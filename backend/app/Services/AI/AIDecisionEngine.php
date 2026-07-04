@@ -15,6 +15,7 @@ class AIDecisionEngine
 {
     public function __construct(
         private readonly AIContextBuilderService $contextBuilder,
+        private readonly EscalationGuard         $escalationGuard,
     ) {}
 
     /**
@@ -48,12 +49,15 @@ class AIDecisionEngine
             lead:                $lead,
         );
 
-        // Safety guardrail: immediate escalation for legal / high-value signals
-        if ($intent === 'complaint_legal') {
-            return $this->forceEscalation($lead, $traceId, $region, $promptPayload, $startedAt);
+        // 1. Run the Escalation Guard (Regex OR LLM)
+        $guardResult = $this->escalationGuard->check($message, $lead, $region);
+
+        if ($guardResult['escalate']) {
+            return $this->forceEscalation($lead, $traceId, $region, $promptPayload, $startedAt, $guardResult);
         }
 
-        $rawDecision = $this->callOpenAI($promptPayload);
+        // 2. Call LLM for B2B reply decision with structured try/catch parsing safety
+        $rawDecision = $this->callOpenAI($promptPayload, $message);
 
         $latencyMs = (int) round((microtime(true) - $startedAt) * 1000);
 
@@ -97,69 +101,100 @@ class AIDecisionEngine
     }
 
     /**
-     * Call OpenAI and parse structured JSON decision.
+     * Call OpenAI and parse structured JSON decision with fallback error recovery.
      */
-    private function callOpenAI(array $promptPayload): array
+    private function callOpenAI(array $promptPayload, InboundMessage $message): array
     {
-        $messages = [
-            ['role' => 'system', 'content' => $promptPayload['system']],
-        ];
+        try {
+            $messages = [
+                ['role' => 'system', 'content' => $promptPayload['system']],
+            ];
 
-        if (!empty($promptPayload['history']) && $promptPayload['history'] !== 'No prior conversation.') {
-            $messages[] = ['role' => 'user', 'content' => "Conversation history:\n" . $promptPayload['history']];
+            if (!empty($promptPayload['history']) && $promptPayload['history'] !== 'No prior conversation.') {
+                $messages[] = ['role' => 'user', 'content' => "Conversation history:\n" . $promptPayload['history']];
+            }
+
+            $messages[] = [
+                'role'    => 'user',
+                'content' => "Lead context: {$promptPayload['context']}\n\nIncoming message: {$promptPayload['message']}",
+            ];
+
+            $response = OpenAI::chat()->create([
+                'model'       => config('openai.model', 'gpt-4o-mini'),
+                'messages'    => $messages,
+                'temperature' => 0.3,
+                'max_tokens'  => 500,
+                'response_format' => ['type' => 'json_object'],
+            ]);
+
+            $content = $response->choices[0]->message->content ?? '{}';
+            $decoded = json_decode($content, true);
+
+            if (!is_array($decoded) || !isset($decoded['decision'])) {
+                throw new \RuntimeException('Structured decision key missing in LLM response');
+            }
+
+            // If LLM returned an explicit escalation field flag, conform it
+            if (!empty($decoded['escalate'])) {
+                return $this->getEscalationResponse('Escalated directly by decision agent payload instructions.');
+            }
+
+            return $decoded;
+
+        } catch (\Throwable $e) {
+            Log::channel('production')->error('AI decision LLM call crashed. Defaulting to escalation.', [
+                'message_id' => $message->id,
+                'error'      => $e->getMessage(),
+            ]);
+
+            return $this->getEscalationResponse('Fail-safe recovery fallback activated: ' . $e->getMessage());
         }
-
-        $messages[] = [
-            'role'    => 'user',
-            'content' => "Lead context: {$promptPayload['context']}\n\nIncoming message: {$promptPayload['message']}",
-        ];
-
-        $response = OpenAI::chat()->create([
-            'model'       => config('openai.model', 'gpt-4o-mini'),
-            'messages'    => $messages,
-            'temperature' => 0.3,
-            'max_tokens'  => 500,
-            'response_format' => ['type' => 'json_object'],
-        ]);
-
-        $content = $response->choices[0]->message->content ?? '{}';
-
-        return json_decode($content, true) ?? [];
     }
 
     /**
-     * Force an escalation decision without calling the LLM.
+     * Map structured default escalation response array.
+     */
+    private function getEscalationResponse(string $reason): array
+    {
+        return [
+            'intent'            => 'complaint_legal',
+            'decision'          => 'escalate',
+            'confidence'        => 1.0,
+            'reply'             => 'Your request has been routed to our manager. A representative will contact you shortly.',
+            'document_required' => null,
+            'escalate'          => true,
+            'ai_score'          => 'warm',
+            'reason'            => $reason
+        ];
+    }
+
+    /**
+     * Force an escalation decision.
      */
     private function forceEscalation(
         ?Lead $lead,
         string $traceId,
         string $region,
         array $promptPayload,
-        float $startedAt
+        float $startedAt,
+        array $guardResult
     ): AiDecision {
         $latencyMs = (int) round((microtime(true) - $startedAt) * 1000);
 
-        Log::channel('production')->warning('AI forced escalation — legal/complaint signal detected', [
+        Log::channel('production')->warning('AI forced escalation hook activated', [
             'trace_id'   => $traceId,
             'region'     => $region,
             'latency_ms' => $latencyMs,
+            'reason'     => $guardResult['reason'] ?? 'Unknown',
         ]);
 
-        $responsePayload = [
-            'intent'            => 'complaint_legal',
-            'decision'          => 'escalate',
-            'confidence'        => 1.0,
-            'reply'             => 'This matter has been escalated to our team. A representative will contact you shortly.',
-            'document_required' => null,
-            'escalate'          => true,
-            'ai_score'          => 'warm',
-        ];
+        $responsePayload = $this->getEscalationResponse($guardResult['reason'] ?? 'Security escalation guard rules triggered.');
 
         $decision = AiDecision::create([
             'id'            => (string) Str::uuid(),
             'lead_id'       => $lead?->id,
             'trace_id'      => $traceId,
-            'intent'        => 'complaint_legal',
+            'intent'        => $guardResult['intent'] ?? 'complaint_legal',
             'region'        => $region,
             'decision_type' => 'escalate',
             'confidence'    => 1.0,
