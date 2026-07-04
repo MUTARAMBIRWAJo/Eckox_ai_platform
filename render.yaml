@@ -66,9 +66,9 @@ services:
       - key: SESSION_DOMAIN
         value: .onrender.com
       - key: SANCTUM_STATEFUL_DOMAINS
-        value: "eckox-ai-platform.vercel.app,localhost:3000,localhost,127.0.0.1"
+        value: "eckox-ai-platform.vercel.app,eckox-ai-platform-jpay9chpx-mutarambirwaj1-gmailcoms-projects.vercel.app,localhost:3000,localhost,127.0.0.1"
       - key: ALLOWED_ORIGINS
-        value: "https://eckox-ai-platform.vercel.app,http://localhost:3000"
+        value: "https://eckox-ai-platform.vercel.app,https://eckox-ai-platform-jpay9chpx-mutarambirwaj1-gmailcoms-projects.vercel.app,http://localhost:3000"
 
       - key: CACHE_STORE
         value: redis
