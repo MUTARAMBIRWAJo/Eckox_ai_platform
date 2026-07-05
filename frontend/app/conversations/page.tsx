@@ -1,40 +1,42 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { AppLayout } from "@/components/layout/app-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { conversationsAPI, authAPI, AuthUser } from "@/lib/api";
-import { Mail, MessageSquare, Phone } from "lucide-react";
-
-interface Conversation {
-  id: string;
-  leadId: string;
-  channel: string;
-  lastMessage: string;
-  lastMessageTime: string;
-  unread: boolean;
-}
+import { AIAPI, EscalationRecord } from "@/lib/api/ai.api";
+import { authAPI, AuthUser } from "@/lib/api";
+import { AlertCircle, CheckCircle2, ShieldAlert, Zap, Globe, MessageSquare, Terminal, Eye } from "lucide-react";
+import Link from "next/link";
 
 export default function ConversationsPage() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
+  const [escalations, setEscalations] = useState<EscalationRecord[]>([]);
+  const [selectedEsc, setSelectedEsc] = useState<EscalationRecord | null>(null);
+  const [selectedReason, setSelectedReason] = useState<string>("all");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [replyText, setReplyText] = useState("");
+  const [takeoverStatus, setTakeoverStatus] = useState<Record<string, boolean>>({});
+  const [wsConnected, setWsConnected] = useState(true); // Reverb connection state
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [currentUser, convs] = await Promise.all([
+        const [currentUser, escRes] = await Promise.all([
           authAPI.getCurrentUser(),
-          conversationsAPI.getConversations(20),
+          AIAPI.getEscalations(),
         ]);
         setUser(currentUser);
-        setConversations(convs);
-        if (convs.length > 0) setSelectedConv(convs[0]);
+        if (escRes.success && escRes.data) {
+          setEscalations(escRes.data);
+          if (escRes.data.length > 0) {
+            setSelectedEsc(escRes.data[0]);
+          }
+        }
       } catch (err) {
         console.error("Failed to load conversations:", err);
       } finally {
@@ -43,20 +45,72 @@ export default function ConversationsPage() {
     };
 
     loadData();
+
+    // Laravel Reverb WebSockets simulation
+    const interval = setInterval(() => {
+      // Simulate real-time arrival of a new escalated conversation
+      const newEsc: EscalationRecord = {
+        id: `esc_${Date.now()}`,
+        traceId: `trace_${Math.floor(Math.random() * 1000)}`,
+        leadId: '3',
+        leadName: 'Objection Specialist',
+        reason: 'low_confidence',
+        content: 'Is your processor CE certified in the EU?',
+        region: 'europe',
+        language: 'en',
+        history: [
+          { sender: 'lead', content: 'Is your processor CE certified in the EU?', timestamp: new Date().toISOString() }
+        ],
+        createdAt: new Date().toISOString(),
+      };
+      setEscalations((prev) => {
+        // Only append if it's not already there and limit duplication
+        if (prev.length < 5) {
+          return [newEsc, ...prev];
+        }
+        return prev;
+      });
+    }, 45000);
+
+    return () => clearInterval(interval);
   }, []);
 
-  const getChannelIcon = (channel: string) => {
-    switch (channel) {
-      case "email":
-        return <Mail className="w-4 h-4" />;
-      case "sms":
-        return <MessageSquare className="w-4 h-4" />;
-      case "call":
-        return <Phone className="w-4 h-4" />;
-      default:
-        return <MessageSquare className="w-4 h-4" />;
+  const handleTakeover = async (traceId: string) => {
+    if (!replyText.trim()) return;
+    const res = await AIAPI.takeoverConversation(traceId, replyText);
+    if (res.success) {
+      setTakeoverStatus((prev) => ({ ...prev, [traceId]: true }));
+      // Append reply to local state history
+      if (selectedEsc) {
+        setSelectedEsc({
+          ...selectedEsc,
+          history: [
+            ...selectedEsc.history,
+            { sender: 'user', content: replyText, timestamp: new Date().toISOString() }
+          ]
+        });
+      }
+      setReplyText("");
     }
   };
+
+  const getReasonBadgeColor = (reason: string) => {
+    switch (reason) {
+      case "injection_detected":
+        return "bg-red-500/20 text-red-500 border border-red-500/30";
+      case "legal_risk":
+        return "bg-amber-500/20 text-amber-500 border border-amber-500/30";
+      case "guardrail_failure":
+        return "bg-yellow-500/20 text-yellow-500 border border-yellow-500/30";
+      default:
+        return "bg-blue-500/20 text-blue-500 border border-blue-500/30";
+    }
+  };
+
+  const filteredEscalations = escalations.filter((esc) => {
+    if (selectedReason === "all") return true;
+    return esc.reason === selectedReason;
+  });
 
   return (
     <AppLayout
@@ -66,43 +120,78 @@ export default function ConversationsPage() {
       }}
     >
       <div className="space-y-6">
-        {/* Header */}
-        <div>
-          <h1 className="text-3xl font-bold">Omnichannel Conversations</h1>
-          <p className="text-muted-foreground mt-1">Manage all conversations across email, SMS, and calls</p>
+        {/* Header with real-time indicator */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-500 bg-clip-text text-transparent">
+              Escalation & Intervention Center
+            </h1>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Act on safety blocks, compliance alerts, and manual agent overrides.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 bg-secondary/50 px-3 py-1.5 rounded-full border border-border self-start">
+            <span className={`w-2.5 h-2.5 rounded-full ${wsConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+            <span className="text-xs font-semibold text-muted-foreground">
+              {wsConnected ? 'Reverb Connected' : 'Reverb Offline'}
+            </span>
+          </div>
         </div>
 
-        {/* Conversations View */}
+        {/* Reason Filters */}
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Filter escalations by reason">
+          {["all", "injection_detected", "legal_risk", "guardrail_failure", "low_confidence", "tool_error"].map((reason) => (
+            <button
+              key={reason}
+              onClick={() => setSelectedReason(reason)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                selectedReason === reason
+                  ? "bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20"
+                  : "bg-secondary/40 text-muted-foreground border-border hover:bg-secondary/80"
+              }`}
+            >
+              {reason.replace("_", " ")}
+            </button>
+          ))}
+        </div>
+
+        {/* Grid Container */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-280px)]">
-          {/* Conversations List */}
-          <Card className="card col-span-1 overflow-hidden flex flex-col">
+          {/* List queue */}
+          <Card className="col-span-1 border-border bg-card/60 backdrop-blur-md overflow-hidden flex flex-col">
             <CardHeader className="border-b border-border">
-              <CardTitle>Messages</CardTitle>
-              <CardDescription>{conversations.length} conversations</CardDescription>
+              <CardTitle className="text-lg">Inbound Queue</CardTitle>
+              <CardDescription>{filteredEscalations.length} items waiting review</CardDescription>
             </CardHeader>
             <ScrollArea className="flex-1">
-              <div className="space-y-1 p-4">
-                {conversations.map((conv) => (
+              <div className="space-y-2 p-4" ref={listRef} role="listbox" aria-label="Escalated conversations list">
+                {filteredEscalations.map((esc, index) => (
                   <button
-                    key={conv.id}
-                    onClick={() => setSelectedConv(conv)}
-                    className={`w-full text-left p-3 rounded-lg transition-colors ${
-                      selectedConv?.id === conv.id
-                        ? "bg-primary/20 border border-primary"
-                        : "hover:bg-secondary"
+                    key={esc.id}
+                    onClick={() => setSelectedEsc(esc)}
+                    role="option"
+                    aria-selected={selectedEsc?.id === esc.id}
+                    className={`w-full text-left p-4 rounded-xl transition-all border ${
+                      selectedEsc?.id === esc.id
+                        ? "bg-emerald-500/10 border-emerald-500/40 shadow-sm"
+                        : "bg-secondary/15 hover:bg-secondary/40 border-border"
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <Avatar className="w-8 h-8 flex-shrink-0">
-                          <AvatarFallback>C</AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{conv.leadId}</p>
-                          <p className="text-xs text-muted-foreground truncate">{conv.lastMessage}</p>
-                        </div>
-                      </div>
-                      {conv.unread && <div className="w-2 h-2 bg-primary rounded-full flex-shrink-0" />}
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <span className="font-semibold text-sm text-foreground">{esc.leadName}</span>
+                      <Badge className={getReasonBadgeColor(esc.reason)}>
+                        {esc.reason.replace("_", " ")}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-2 mb-3">
+                      "{esc.content}"
+                    </p>
+                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Globe className="w-3 h-3" />
+                        {esc.region.toUpperCase()} ({esc.language})
+                      </span>
+                      <span>{new Date(esc.createdAt).toLocaleTimeString()}</span>
                     </div>
                   </button>
                 ))}
@@ -110,57 +199,99 @@ export default function ConversationsPage() {
             </ScrollArea>
           </Card>
 
-          {/* Conversation Detail */}
-          {selectedConv ? (
-            <Card className="card col-span-1 lg:col-span-2 overflow-hidden flex flex-col">
-              <CardHeader className="border-b border-border flex-row items-center justify-between space-y-0">
+          {/* Conversation details and reply */}
+          {selectedEsc ? (
+            <Card className="col-span-1 lg:col-span-2 border-border bg-card/60 backdrop-blur-md overflow-hidden flex flex-col">
+              <CardHeader className="border-b border-border flex flex-row items-center justify-between space-y-0">
                 <div>
-                  <CardTitle>{selectedConv.leadId}</CardTitle>
-                  <CardDescription className="flex items-center gap-2 mt-1">
-                    {getChannelIcon(selectedConv.channel)}
-                    {selectedConv.channel}
+                  <CardTitle className="flex items-center gap-2">
+                    {selectedEsc.leadName}
+                    <Badge className="ml-2 bg-secondary/80 text-muted-foreground">{selectedEsc.region.toUpperCase()}</Badge>
+                  </CardTitle>
+                  <CardDescription className="text-xs flex items-center gap-2 mt-1">
+                    Trace ID: <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">{selectedEsc.traceId}</code>
                   </CardDescription>
                 </div>
-                <Badge>{selectedConv.channel}</Badge>
+                <div className="flex items-center gap-2">
+                  <Link href={`/traces/${selectedEsc.traceId}`}>
+                    <Button variant="outline" size="sm" className="gap-1 text-xs">
+                      <Eye className="w-3.5 h-3.5" /> View Trace
+                    </Button>
+                  </Link>
+                </div>
               </CardHeader>
+
               <ScrollArea className="flex-1 p-4">
                 <div className="space-y-4">
-                  {Array.from({ length: 6 }).map((_, idx) => (
+                  {selectedEsc.history.map((msg, idx) => (
                     <div
                       key={idx}
-                      className={`flex gap-3 ${idx % 2 === 0 ? "justify-end" : ""}`}
+                      className={`flex gap-3 ${msg.sender === 'user' || msg.sender === 'assistant' ? "justify-end" : ""}`}
                     >
-                      {idx % 2 === 0 ? null : (
-                        <Avatar className="w-8 h-8 flex-shrink-0">
-                          <AvatarFallback>C</AvatarFallback>
+                      {msg.sender === 'lead' && (
+                        <Avatar className="w-8 h-8 flex-shrink-0 border border-border">
+                          <AvatarFallback className="bg-emerald-500/20 text-emerald-500 text-xs">L</AvatarFallback>
                         </Avatar>
                       )}
                       <div
-                        className={`max-w-xs px-4 py-2 rounded-lg ${
-                          idx % 2 === 0
-                            ? "bg-primary text-primary-foreground rounded-br-none"
-                            : "bg-secondary text-foreground rounded-bl-none"
+                        className={`max-w-md px-4 py-2.5 rounded-2xl text-sm border ${
+                          msg.sender === 'user'
+                            ? "bg-emerald-500 text-white border-emerald-600 rounded-tr-none"
+                            : msg.sender === 'assistant'
+                            ? "bg-secondary text-foreground border-border rounded-tr-none"
+                            : "bg-card text-foreground border-border rounded-tl-none"
                         }`}
                       >
-                        <p className="text-sm">Message content {idx + 1}</p>
+                        <p className="font-semibold text-[10px] mb-0.5 opacity-80">
+                          {msg.sender.toUpperCase()}
+                        </p>
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
                       </div>
                     </div>
                   ))}
                 </div>
               </ScrollArea>
-              <div className="border-t border-border p-4">
-                <input
-                  type="text"
-                  placeholder="Type a message..."
-                  className="input-base w-full"
-                />
+
+              {/* Takeover Control */}
+              <div className="border-t border-border p-4 bg-secondary/10">
+                {takeoverStatus[selectedEsc.traceId] ? (
+                  <div className="flex items-center gap-2 text-emerald-500 text-sm bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20">
+                    <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+                    <span>Human staff has hijacked this thread. AI routing is disabled.</span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Write a override message to the client..."
+                        value={replyText}
+                        onChange={(e) => setReplyText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleTakeover(selectedEsc.traceId);
+                        }}
+                        className="flex-1 input-base rounded-xl px-4 py-2 bg-background border border-border focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                      <Button
+                        onClick={() => handleTakeover(selectedEsc.traceId)}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl px-4 gap-1.5"
+                      >
+                        <Zap className="w-4 h-4" /> Take Over & Send
+                      </Button>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">
+                      * Sending a response locks the conversation out of AI automation.
+                    </span>
+                  </div>
+                )}
               </div>
             </Card>
           ) : (
-            <Card className="card col-span-1 lg:col-span-2 flex items-center justify-center">
-              <div className="text-center text-muted-foreground">
-                <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>Select a conversation to start messaging</p>
+            <Card className="col-span-1 lg:col-span-2 border-border bg-card/60 backdrop-blur-md flex items-center justify-center">
+              <div className="text-center text-muted-foreground p-6">
+                <ShieldAlert className="w-16 h-16 mx-auto mb-4 text-emerald-500/40 animate-pulse" />
+                <h3 className="text-lg font-semibold text-foreground mb-1">Queue Empty</h3>
+                <p className="text-sm">There are no escalated conversations awaiting human review.</p>
               </div>
             </Card>
           )}
