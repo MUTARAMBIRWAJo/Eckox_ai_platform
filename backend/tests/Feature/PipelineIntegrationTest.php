@@ -494,4 +494,159 @@ class PipelineIntegrationTest extends TestCase
         $this->assertNotEmpty($decision->trace_id);
         $this->assertTrue(\Illuminate\Support\Str::isUuid($decision->trace_id));
     }
+
+    // =========================================================================
+    // Scenario 8: Guardrail failure prevents ActionExecutionNode staged actions
+    // =========================================================================
+    public function test_guardrail_failure_prevents_action_execution(): void
+    {
+        $docEngineSpy = $this->spy(\App\Services\Documents\DocumentGenerationEngine::class);
+
+        OpenAI::fake([
+            // EscalationGuard check
+            CreateResponse::fake([
+                'choices' => [['message' => ['content' => json_encode(['requires_human_escalation' => false, 'reason' => 'normal', 'confidence' => 1.0])]]]
+            ]),
+            // LLM Call 1 -> Requests PDF generation but hallucinates price
+            CreateResponse::fake([
+                'choices' => [
+                    [
+                        'finish_reason' => 'tool_calls',
+                        'message' => [
+                            'content' => null,
+                            'tool_calls' => [
+                                [
+                                    'id' => 'call-pdf-1',
+                                    'type' => 'function',
+                                    'function' => [
+                                        'name' => 'create_quote_pdf',
+                                        'arguments' => json_encode(['sku' => 'SKU-PROC-X', 'region' => 'europe', 'quantity' => 10, 'lead_id' => 1])
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]),
+            // LLM Call 2 (after tool execution) -> yields reply with incorrect price
+            CreateResponse::fake([
+                'choices' => [
+                    [
+                        'finish_reason' => 'stop',
+                        'message' => [
+                            'content' => json_encode([
+                                'intent' => 'buy_intent',
+                                'decision' => 'reply',
+                                'confidence' => 0.99,
+                                'reply_text' => 'Here is your quote for 999.00 EUR.',
+                                'cited_facts' => [
+                                    ['field' => 'price', 'value' => 999.00, 'source' => 'product:SKU-PROC-X']
+                                ],
+                                'document_required' => null,
+                                'escalate' => false,
+                                'ai_score' => 'hot'
+                            ])
+                        ]
+                    ]
+                ]
+            ]),
+            // LLM Call 3 (retry after guardrail mismatch check) -> still hallucinates
+            CreateResponse::fake([
+                'choices' => [
+                    [
+                        'finish_reason' => 'stop',
+                        'message' => [
+                            'content' => json_encode([
+                                'intent' => 'buy_intent',
+                                'decision' => 'reply',
+                                'confidence' => 0.99,
+                                'reply_text' => 'Price is still 999.00 EUR.',
+                                'cited_facts' => [
+                                    ['field' => 'price', 'value' => 999.00, 'source' => 'product:SKU-PROC-X']
+                                ],
+                                'document_required' => null,
+                                'escalate' => false,
+                                'ai_score' => 'hot'
+                            ])
+                        ]
+                    ]
+                ]
+            ])
+        ]);
+
+        $message = InboundMessage::create([
+            'channel' => 'whatsapp',
+            'sender'  => '+1234567890',
+            'content' => 'Please generate a quote for Eckox Processor X.',
+            'country' => 'FR',
+            'lead_id' => $this->lead->id,
+        ]);
+
+        $engine = app(AIDecisionEngine::class);
+        $decision = $engine->analyse($message, $this->lead);
+
+        // Confirm guardrail failure results in escalation
+        $this->assertEquals('escalate', $decision->decision_type);
+        // Confirm staged PDF action was never run
+        $docEngineSpy->shouldNotHaveReceived('generate');
+    }
+
+    // =========================================================================
+    // Scenario 9: Multi-LLM Provider Failover Sequence
+    // =========================================================================
+    public function test_multi_llm_failover_sequence(): void
+    {
+        config([
+            'services.anthropic.key' => 'fake_anthropic_key',
+            'services.groq.key' => 'fake_groq_key',
+        ]);
+
+        // 1. Force OpenAI client to throw exception for the main LLM call
+        // (EscalationGuard runs first and succeeds)
+        OpenAI::fake([
+            CreateResponse::fake([
+                'choices' => [['message' => ['content' => json_encode(['requires_human_escalation' => false, 'reason' => 'normal', 'confidence' => 1.0])]]]
+            ]),
+            new \RuntimeException('OpenAI connection error')
+        ]);
+
+        // 2. Mock Anthropic to return 500 error
+        // 3. Mock Groq to succeed and return faked JSON response
+        \Illuminate\Support\Facades\Http::fake([
+            'https://api.anthropic.com/*' => \Illuminate\Support\Facades\Http::response(['error' => 'Internal Server Error'], 500),
+            'https://api.groq.com/*' => \Illuminate\Support\Facades\Http::response([
+                'choices' => [
+                    [
+                        'finish_reason' => 'stop',
+                        'message' => [
+                            'content' => json_encode([
+                                'intent' => 'general',
+                                'decision' => 'reply',
+                                'confidence' => 0.99,
+                                'reply_text' => 'Groq reply success.',
+                                'cited_facts' => [],
+                                'document_required' => null,
+                                'escalate' => false,
+                                'ai_score' => 'warm'
+                            ])
+                        ]
+                    ]
+                ]
+            ], 200)
+        ]);
+
+        $message = InboundMessage::create([
+            'channel' => 'whatsapp',
+            'sender'  => '+1234567890',
+            'content' => 'Hello team.',
+            'country' => 'NG',
+            'lead_id' => $this->lead->id,
+        ]);
+
+        $engine = app(AIDecisionEngine::class);
+        $decision = $engine->analyse($message, $this->lead);
+
+        $this->assertEquals('reply', $decision->decision_type);
+        $this->assertEquals('Groq reply success.', $decision->response['reply_text']);
+    }
 }

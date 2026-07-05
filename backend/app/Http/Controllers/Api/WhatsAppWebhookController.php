@@ -44,6 +44,21 @@ class WhatsAppWebhookController extends Controller
             'ip'       => $request->ip(),
         ]);
 
+        $signature = $request->header('X-360Dialog-Signature');
+        $secret    = config('services.whatsapp.platform_secret') ?: env('WHATSAPP_PLATFORM_SECRET');
+
+        if ($secret) {
+            $computed = hash_hmac('sha256', $request->getContent(), $secret);
+            if (!hash_equals($computed, (string) $signature)) {
+                Log::channel('production')->warning('WhatsApp webhook signature mismatch', [
+                    'computed' => $computed,
+                    'header'   => $signature,
+                    'trace_id' => $traceId,
+                ]);
+                return response()->json(['error' => 'Invalid signature'], 401);
+            }
+        }
+
         $payload = $request->all();
 
         // Parse normalized message from webhook payload

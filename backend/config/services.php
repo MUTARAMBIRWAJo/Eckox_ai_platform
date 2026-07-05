@@ -36,10 +36,11 @@ return [
     ],
 
     'whatsapp' => [
-        'api_key'         => env('WHATSAPP_API_KEY'),
+        'api_key'         => env('WHATSAPP_D360_API_KEY', env('WHATSAPP_API_KEY')),
         'base_url'        => env('WHATSAPP_BASE_URL', 'https://waba.360dialog.io/v1'),
         'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
         'verify_token'    => env('WHATSAPP_VERIFY_TOKEN'),
+        'platform_secret' => env('WHATSAPP_PLATFORM_SECRET'),
     ],
 
 ];
