@@ -42,5 +42,12 @@ return [
         'verify_token'    => env('WHATSAPP_VERIFY_TOKEN'),
         'platform_secret' => env('WHATSAPP_PLATFORM_SECRET'),
     ],
+    'anthropic' => [
+        'key' => env('ANTHROPIC_API_KEY'),
+    ],
+
+    'groq' => [
+        'key' => env('GROQ_API_KEY'),
+    ],
 
 ];

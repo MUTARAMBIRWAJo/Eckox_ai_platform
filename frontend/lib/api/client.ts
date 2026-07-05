@@ -9,6 +9,8 @@ export interface APIResponse<T> {
   message?: string;
 }
 
+const TOKEN_KEY = 'eckox_auth_token';
+
 class APIClient {
   private client: AxiosInstance;
   private baseURL: string;
@@ -25,6 +27,15 @@ class APIClient {
         'Content-Type': 'application/json',
         'X-Requested-With': 'XMLHttpRequest',
       },
+    });
+
+    // Request interceptor — attach Bearer token on every request
+    this.client.interceptors.request.use((config) => {
+      const token = this.getToken();
+      if (token) {
+        config.headers['Authorization'] = `Bearer ${token}`;
+      }
+      return config;
     });
 
     // Response interceptor - handle errors
@@ -52,6 +63,21 @@ class APIClient {
         return Promise.reject(error);
       }
     );
+  }
+
+  // ── Token helpers ──────────────────────────────────────────────────────────
+  getToken(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(TOKEN_KEY);
+  }
+
+  setToken(token: string | null): void {
+    if (typeof window === 'undefined') return;
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_KEY);
+    }
   }
 
   // Sanctum CSRF Cookie Initialization

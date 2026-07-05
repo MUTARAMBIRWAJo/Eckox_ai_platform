@@ -98,18 +98,27 @@ export class AIAPI {
 
   // Streaming chat
   static async *streamChat(messages: ChatMessage[], signal?: AbortSignal): AsyncGenerator<string> {
+    // Backend expects { message: string } — extract the last user message
+    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUserMessage) return;
+
+    const token = apiClient.getToken();
+
     try {
       const response = await fetch(`${apiClient.getBaseURL()}/ai/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({ message: lastUserMessage.content }),
         signal,
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to start chat stream: ${response.statusText}`);
+        const errText = await response.text().catch(() => response.statusText);
+        throw new Error(`Chat stream failed (${response.status}): ${errText}`);
       }
 
       const reader = response.body?.getReader();
@@ -132,14 +141,21 @@ export class AIAPI {
           const trimmed = line.trim();
           if (!trimmed) continue;
 
-          if (trimmed.startsWith('data: ')) {
-            const dataContent = trimmed.slice(6).trim();
-            if (dataContent === '[DONE]') {
-              return;
-            }
-            yield dataContent;
-          } else {
-            yield trimmed;
+          const dataContent = trimmed.startsWith('data: ')
+            ? trimmed.slice(6).trim()
+            : trimmed;
+
+          if (dataContent === '[DONE]') return;
+
+          try {
+            const parsed = JSON.parse(dataContent);
+            // Backend emits: { text: "..." } for chunks, { done: true } at end, { error: "..." } on errors
+            if (parsed.done) return;
+            if (parsed.error) throw new Error(parsed.error);
+            if (parsed.text) yield parsed.text as string;
+          } catch (parseErr) {
+            if (parseErr instanceof SyntaxError) continue; // skip non-JSON lines
+            throw parseErr;
           }
         }
       }
@@ -152,6 +168,7 @@ export class AIAPI {
       throw error;
     }
   }
+
 
   // Lead scoring
   static async scoreLead(leadData: LeadData): Promise<APIResponse<LeadScoreResponse>> {
