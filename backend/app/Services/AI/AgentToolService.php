@@ -5,18 +5,16 @@ namespace App\Services\AI;
 use App\Models\KnowledgeBase;
 use App\Models\Lead;
 use App\Models\Product;
+use App\Models\LeadActivity;
 use App\Services\Documents\DocumentGenerationEngine;
+use App\Services\Channels\WhatsAppService;
+use App\Services\Channels\EmailService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * Layer 7 — Tool-Calling Architecture
- *
- * All fact-bearing operations the LLM may request are implemented here as
- * discrete, typed tools. The LLM NEVER generates the values — it only chooses
- * which tool to call and with what validated inputs. Every call is logged
- * against the conversation trace_id for full auditability.
+ * Layer 7 — Tool-Calling Architecture (Extended with Observable Graph Tools)
  */
 class AgentToolService
 {
@@ -57,11 +55,34 @@ class AgentToolService
             'description' => 'Creates a human escalation record when LLM cannot answer from context.',
             'parameters'  => ['lead_id' => 'int|null', 'reason' => 'string', 'trace_id' => 'string'],
         ],
+        [
+            'name'        => 'send_whatsapp_message',
+            'description' => 'Sends a WhatsApp text message to the customer.',
+            'parameters'  => ['to' => 'string', 'message' => 'string'],
+        ],
+        [
+            'name'        => 'send_email',
+            'description' => 'Sends an email reply to the customer.',
+            'parameters'  => ['to' => 'string', 'subject' => 'string', 'body' => 'string'],
+        ],
+        [
+            'name'        => 'schedule_followup',
+            'description' => 'Schedules a CRM activity follow-up task for a lead.',
+            'parameters'  => ['lead_id' => 'int', 'date' => 'string', 'description' => 'string'],
+        ],
     ];
+
+    private readonly WhatsAppService $whatsappService;
+    private readonly EmailService $emailService;
 
     public function __construct(
         private readonly DocumentGenerationEngine $documentEngine,
-    ) {}
+        ?WhatsAppService $whatsappService = null,
+        ?EmailService $emailService = null,
+    ) {
+        $this->whatsappService = $whatsappService ?: app(WhatsAppService::class);
+        $this->emailService = $emailService ?: app(EmailService::class);
+    }
 
     /**
      * Dispatch a tool call by name with validated inputs.
@@ -73,13 +94,16 @@ class AgentToolService
         $startedAt = microtime(true);
 
         $result = match ($toolName) {
-            'get_product_price'  => $this->getProductPrice($inputs),
-            'check_stock'        => $this->checkStock($inputs),
-            'get_product_spec'   => $this->getProductSpec($inputs),
-            'get_compliance_doc' => $this->getComplianceDoc($inputs),
-            'create_quote_pdf'   => $this->createQuotePdf($inputs),
-            'generate_invoice'   => $this->generateInvoice($inputs),
-            'escalate_to_human'  => $this->escalateToHuman($inputs, $traceId),
+            'get_product_price'   => $this->getProductPrice($inputs),
+            'check_stock'         => $this->checkStock($inputs),
+            'get_product_spec'    => $this->getProductSpec($inputs),
+            'get_compliance_doc'  => $this->getComplianceDoc($inputs),
+            'create_quote_pdf'    => $this->createQuotePdf($inputs),
+            'generate_invoice'    => $this->generateInvoice($inputs),
+            'escalate_to_human'   => $this->escalateToHuman($inputs, $traceId),
+            'send_whatsapp_message' => $this->sendWhatsAppMessage($inputs, $traceId),
+            'send_email'          => $this->sendEmail($inputs, $traceId),
+            'schedule_followup'   => $this->scheduleFollowup($inputs),
             default              => throw new \InvalidArgumentException("Unknown tool: {$toolName}"),
         };
 
@@ -95,10 +119,6 @@ class AgentToolService
 
         return $result;
     }
-
-    // =========================================================================
-    // Tool implementations
-    // =========================================================================
 
     private function getProductPrice(array $inputs): array
     {
@@ -195,7 +215,6 @@ class AgentToolService
         $region   = (string) ($inputs['region']   ?? throw new \InvalidArgumentException('create_quote_pdf requires region'));
         $quantity = (int)    ($inputs['quantity']  ?? 1);
 
-        // Always re-fetch price from DB — never trust a price value from LLM inputs
         $priceResult = $this->getProductPrice(['sku' => $sku, 'region' => $region]);
         if (! $priceResult['found']) {
             return ['success' => false, 'message' => "Cannot generate quote: {$priceResult['message']}"];
@@ -293,6 +312,54 @@ class AgentToolService
             'escalated'  => true,
             'reason'     => $reason,
             'reply_text' => 'Let me confirm this with our team and follow up shortly.',
+        ];
+    }
+
+    private function sendWhatsAppMessage(array $inputs, string $traceId): array
+    {
+        $to      = (string) ($inputs['to']      ?? throw new \InvalidArgumentException('send_whatsapp_message requires to'));
+        $message = (string) ($inputs['message'] ?? throw new \InvalidArgumentException('send_whatsapp_message requires message'));
+
+        $success = $this->whatsappService->sendText($to, $message, $traceId);
+
+        return [
+            'success' => $success,
+            'channel' => 'whatsapp',
+            'to'      => $to,
+        ];
+    }
+
+    private function sendEmail(array $inputs, string $traceId): array
+    {
+        $to      = (string) ($inputs['to']      ?? throw new \InvalidArgumentException('send_email requires to'));
+        $subject = (string) ($inputs['subject'] ?? throw new \InvalidArgumentException('send_email requires subject'));
+        $body    = (string) ($inputs['body']    ?? throw new \InvalidArgumentException('send_email requires body'));
+
+        $success = $this->emailService->sendReply($to, $subject, $body, null, $traceId);
+
+        return [
+            'success' => $success,
+            'channel' => 'email',
+            'to'      => $to,
+        ];
+    }
+
+    private function scheduleFollowup(array $inputs): array
+    {
+        $leadId      = (int)    ($inputs['lead_id']     ?? throw new \InvalidArgumentException('schedule_followup requires lead_id'));
+        $date        = (string) ($inputs['date']        ?? throw new \InvalidArgumentException('schedule_followup requires date'));
+        $description = (string) ($inputs['description'] ?? throw new \InvalidArgumentException('schedule_followup requires description'));
+
+        $activity = LeadActivity::create([
+            'lead_id'     => $leadId,
+            'type'        => 'task',
+            'description' => "Scheduled follow-up: {$description} on {$date}",
+        ]);
+
+        return [
+            'success'     => true,
+            'activity_id' => $activity->id,
+            'description' => $activity->description,
         ];
     }
 

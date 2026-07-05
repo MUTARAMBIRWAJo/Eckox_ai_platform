@@ -13,9 +13,9 @@ class WhatsAppService
 
     public function __construct()
     {
-        $this->apiKey        = config('services.whatsapp.api_key', '');
-        $this->baseUrl       = config('services.whatsapp.base_url', 'https://waba.360dialog.io/v1');
-        $this->phoneNumberId = config('services.whatsapp.phone_number_id', '');
+        $this->apiKey        = (string) config('services.whatsapp.api_key', '');
+        $this->baseUrl       = (string) config('services.whatsapp.base_url', 'https://waba.360dialog.io/v1');
+        $this->phoneNumberId = (string) config('services.whatsapp.phone_number_id', '');
     }
 
     /**
