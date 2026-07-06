@@ -65,9 +65,7 @@ export class AIAPI {
    * Returns an async generator of text chunks.
    */
   static async *streamChat(
-    message: string,
-    conversationHistory: { role: string; content: string }[],
-    leadId?: string | null,
+    messages: { role: string; content: string }[],
     abortSignal?: AbortSignal
   ): AsyncGenerator<string> {
     const baseURL = apiClient.getBaseURL();
@@ -80,7 +78,7 @@ export class AIAPI {
         'Accept': 'text/event-stream',
         ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ message, history: conversationHistory, lead_id: leadId }),
+      body: JSON.stringify({ messages }),
       signal: abortSignal,
     });
 
@@ -108,7 +106,23 @@ export class AIAPI {
             const data = line.slice(6).trim();
             if (data === '[DONE]') return;
             if (data === '[ERROR]') throw new Error('Stream error from server');
-            if (data) yield data;
+            if (data) {
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.text) {
+                  yield parsed.text;
+                } else if (parsed.error) {
+                  throw new Error(parsed.error);
+                } else {
+                  yield data;
+                }
+              } catch (e: any) {
+                if (e.message && (e.message.includes('API key') || e.message.includes('Stream error'))) {
+                  throw e;
+                }
+                yield data;
+              }
+            }
           }
         }
       }

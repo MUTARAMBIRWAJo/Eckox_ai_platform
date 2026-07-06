@@ -89,4 +89,17 @@ class AIChatSecurityTest extends TestCase
         $response->assertStatus(500);
         $this->assertStringContainsString('pricing or product context', $response->json('message'));
     }
+
+    public function test_frontend_payload(): void
+    {
+        $response = $this->actingAs($this->staffUser, 'sanctum')
+            ->postJson('/api/ai/chat/stream', [
+                'messages' => [
+                    ['role' => 'user', 'content' => 'hello'],
+                ],
+            ]);
+
+        $response->assertStatus(200)
+            ->assertHeader('Content-Type', 'text/event-stream; charset=UTF-8');
+    }
 }
