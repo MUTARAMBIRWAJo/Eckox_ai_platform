@@ -12,7 +12,8 @@ class IntentClassifierNode implements AgentNode
 {
     public function __construct(
         private readonly AIContextBuilderService $contextBuilder,
-        private readonly ResponseGuardrail $responseGuardrail
+        private readonly ResponseGuardrail $responseGuardrail,
+        private readonly EscalationGuard $escalationGuard
     ) {}
 
     public function handle(AgentState $state): AgentState
@@ -20,6 +21,15 @@ class IntentClassifierNode implements AgentNode
         $startedAt = microtime(true);
 
         $content = $state->message?->content ?? '';
+
+        // Pre-initialize prompt payload to avoid undefined key exceptions
+        $state->promptPayload = [
+            'system'  => '',
+            'context' => '',
+            'history' => '',
+            'message' => $this->redactPII($content),
+            'intent'  => 'general',
+        ];
 
         // 1. Run prompt injection pre-screen BEFORE any LLM nodes run (fails closed)
         try {
@@ -46,9 +56,8 @@ class IntentClassifierNode implements AgentNode
 
         // 2. Run EscalationGuard pre-screen check (Layer 5 — Human Handoff)
         // This consumes the first faked OpenAI response as expected by test suites.
-        $escGuard = app(EscalationGuard::class);
         $state->region = $this->contextBuilder->detectRegion($state->message?->country ?? '');
-        $guardResult = $state->message ? $escGuard->check($state->message, $state->lead, $state->region) : ['escalate' => false];
+        $guardResult = $state->message ? $this->escalationGuard->check($state->message, $state->lead, $state->region) : ['escalate' => false];
 
         if ($guardResult['escalate']) {
             $state->escalated = true;

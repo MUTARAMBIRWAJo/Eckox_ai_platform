@@ -6,9 +6,7 @@ use App\Services\AI\AgentNode;
 use App\Services\AI\AgentState;
 use App\Services\AI\AgentToolService;
 use App\Services\AI\AIContextBuilderService;
-use App\Services\AI\Providers\OpenAIProvider;
-use App\Services\AI\Providers\AnthropicProvider;
-use App\Services\AI\Providers\GroqProvider;
+use App\Services\AI\Router\LLMRouter;
 use Illuminate\Support\Facades\Log;
 
 class LlmReasoningNode implements AgentNode
@@ -16,8 +14,9 @@ class LlmReasoningNode implements AgentNode
     private const MAX_LOOP = 5;
 
     public function __construct(
-        private readonly ToolRouterNode $toolRouter,
-        private readonly AIContextBuilderService $contextBuilder
+        private readonly ToolRouterNode           $toolRouter,
+        private readonly AIContextBuilderService  $contextBuilder,
+        private readonly LLMRouter                $llmRouter,
     ) {}
 
     public function handle(AgentState $state): AgentState
@@ -30,7 +29,7 @@ class LlmReasoningNode implements AgentNode
             return $state;
         }
 
-        // Build the prompt payload (Task 1 / 3 RAG integration)
+        // Build the prompt payload (RAG integration)
         $redactedContent = $this->redactPII($state->message?->content ?? '');
         $state->promptPayload = $this->contextBuilder->buildPrompt(
             region:               $state->region,
@@ -61,6 +60,7 @@ class LlmReasoningNode implements AgentNode
         ];
 
         $loopCount = 0;
+        $tools     = $this->buildOpenAIToolDefinitions();
 
         while (true) {
             $loopCount++;
@@ -68,26 +68,37 @@ class LlmReasoningNode implements AgentNode
                 Log::channel('production')->warning('Multi-LLM tool execution loop cap exceeded', [
                     'trace_id' => $state->traceId,
                 ]);
-                $state->escalated = true;
-                $state->reason = "Tool execution loop cap of " . self::MAX_LOOP . " exceeded.";
+                $state->escalated    = true;
+                $state->reason       = "Tool execution loop cap of " . self::MAX_LOOP . " exceeded.";
                 $state->finalDecision = $this->getEscalationResponse($state->reason);
                 break;
             }
 
-            // Call Multi-LLM completion
-            $responseObj = $this->runMultiLlmCompletion($messages, $state);
+            // Route through LLMRouter (intent-aware, circuit-broken, retrying)
+            $responseObj = $this->llmRouter->chat($messages, $tools, $state);
 
             if (empty($responseObj)) {
                 // All providers failed
-                $state->escalated = true;
-                $state->reason = "All LLM providers failed to complete the request.";
+                $state->escalated     = true;
+                $state->reason        = "All LLM providers failed to complete the request.";
                 $state->finalDecision = $this->getEscalationResponse($state->reason);
                 break;
             }
 
-            // Log the provider that served this turn
+            // Record rich observability data on state
             $state->llmProvider = $responseObj['provider'];
-            $choice = $responseObj['choice'];
+            $choice             = $responseObj['choice'];
+
+            // Accumulate token + cost data across tool-call loops
+            if (!isset($state->latencyMs['tokens_prompt'])) {
+                $state->latencyMs['tokens_prompt']     = 0;
+                $state->latencyMs['tokens_completion'] = 0;
+                $state->latencyMs['cost_usd']          = 0.0;
+            }
+            $state->latencyMs['tokens_prompt']     += $responseObj['usage']['prompt_tokens'] ?? 0;
+            $state->latencyMs['tokens_completion'] += $responseObj['usage']['completion_tokens'] ?? 0;
+            $state->latencyMs['cost_usd']          += $responseObj['cost_usd'] ?? 0.0;
+            $state->latencyMs['model']              = $responseObj['model'] ?? $state->llmProvider;
 
             // Process tool calls
             $toolCallsRaw = $choice['message']['tool_calls'] ?? [];
@@ -119,8 +130,8 @@ class LlmReasoningNode implements AgentNode
 
                 if (!empty($decoded['escalate']) || ($decoded['decision'] ?? '') === 'escalate') {
                     $state->escalated = true;
-                    $state->reason = $decoded['reason'] ?? 'LLM requested escalation';
-                    $decoded = $this->getEscalationResponse($state->reason);
+                    $state->reason    = $decoded['reason'] ?? 'LLM requested escalation';
+                    $decoded          = $this->getEscalationResponse($state->reason);
                 }
 
                 if (isset($decoded['intent'])) {
@@ -128,7 +139,7 @@ class LlmReasoningNode implements AgentNode
                 }
 
                 $state->llmRawResponse = $decoded;
-                $state->finalDecision = $decoded;
+                $state->finalDecision  = $decoded;
                 break;
             }
 
@@ -153,69 +164,38 @@ class LlmReasoningNode implements AgentNode
             }
         }
 
-        $state->nodePath[] = 'llm_reasoning';
-        $state->latencyMs['llm_reasoning'] = (int) round((microtime(true) - $startedAt) * 1000);
+        $state->nodePath[]                    = 'llm_reasoning';
+        $state->latencyMs['llm_reasoning']    = (int) round((microtime(true) - $startedAt) * 1000);
 
         return $state;
-    }
-
-    /**
-     * Tries providers sequentially: OpenAI -> Anthropic -> Groq
-     */
-    private function runMultiLlmCompletion(array $messages, AgentState $state): ?array
-    {
-        $providers = [
-            'openai'    => OpenAIProvider::class,
-            'anthropic' => AnthropicProvider::class,
-            'groq'      => GroqProvider::class,
-        ];
-
-        $tools = $this->buildOpenAIToolDefinitions();
-
-        foreach ($providers as $name => $class) {
-            try {
-                $client = app($class);
-                $result = $client->generate($messages, $tools, $state);
-                if ($result) {
-                    return $result;
-                }
-            } catch (\Throwable $e) {
-                Log::channel('production')->warning("Provider [{$name}] failed in multi-LLM router", [
-                    'trace_id' => $state->traceId,
-                    'error'    => $e->getMessage(),
-                ]);
-            }
-        }
-
-        return null;
     }
 
     private function buildOpenAIToolDefinitions(): array
     {
         $parameterSchemas = [
-            'get_product_price'  => ['sku' => 'string', 'region' => 'string'],
-            'check_stock'        => ['sku' => 'string'],
-            'get_product_spec'   => ['sku' => 'string'],
-            'get_compliance_doc' => ['region' => 'string', 'doc_type' => 'string'],
-            'create_quote_pdf'   => ['lead_id' => 'integer', 'sku' => 'string', 'region' => 'string', 'quantity' => 'integer'],
-            'generate_invoice'   => ['lead_id' => 'integer', 'sku' => 'string', 'region' => 'string', 'quantity' => 'integer'],
-            'escalate_to_human'  => ['reason' => 'string'],
+            'get_product_price'     => ['sku' => 'string', 'region' => 'string'],
+            'check_stock'           => ['sku' => 'string'],
+            'get_product_spec'      => ['sku' => 'string'],
+            'get_compliance_doc'    => ['region' => 'string', 'doc_type' => 'string'],
+            'create_quote_pdf'      => ['lead_id' => 'integer', 'sku' => 'string', 'region' => 'string', 'quantity' => 'integer'],
+            'generate_invoice'      => ['lead_id' => 'integer', 'sku' => 'string', 'region' => 'string', 'quantity' => 'integer'],
+            'escalate_to_human'     => ['reason' => 'string'],
             'send_whatsapp_message' => ['to' => 'string', 'message' => 'string'],
-            'send_email'          => ['to' => 'string', 'subject' => 'string', 'body' => 'string'],
-            'schedule_followup'   => ['lead_id' => 'integer', 'date' => 'string', 'description' => 'string'],
+            'send_email'            => ['to' => 'string', 'subject' => 'string', 'body' => 'string'],
+            'schedule_followup'     => ['lead_id' => 'integer', 'date' => 'string', 'description' => 'string'],
         ];
 
         $required = [
-            'get_product_price'  => ['sku', 'region'],
-            'check_stock'        => ['sku'],
-            'get_product_spec'   => ['sku'],
-            'get_compliance_doc' => ['region', 'doc_type'],
-            'create_quote_pdf'   => ['sku', 'region', 'quantity'],
-            'generate_invoice'   => ['sku', 'region', 'quantity'],
-            'escalate_to_human'  => ['reason'],
+            'get_product_price'     => ['sku', 'region'],
+            'check_stock'           => ['sku'],
+            'get_product_spec'      => ['sku'],
+            'get_compliance_doc'    => ['region', 'doc_type'],
+            'create_quote_pdf'      => ['sku', 'region', 'quantity'],
+            'generate_invoice'      => ['sku', 'region', 'quantity'],
+            'escalate_to_human'     => ['reason'],
             'send_whatsapp_message' => ['to', 'message'],
-            'send_email'          => ['to', 'subject', 'body'],
-            'schedule_followup'   => ['lead_id', 'date', 'description'],
+            'send_email'            => ['to', 'subject', 'body'],
+            'schedule_followup'     => ['lead_id', 'date', 'description'],
         ];
 
         return array_map(function ($tool) use ($parameterSchemas, $required) {

@@ -98,10 +98,6 @@ export class AIAPI {
 
   // Streaming chat
   static async *streamChat(messages: ChatMessage[], signal?: AbortSignal): AsyncGenerator<string> {
-    // Backend expects { message: string } — extract the last user message
-    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-    if (!lastUserMessage) return;
-
     const token = apiClient.getToken();
 
     try {
@@ -112,7 +108,7 @@ export class AIAPI {
           'X-Requested-With': 'XMLHttpRequest',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ message: lastUserMessage.content }),
+        body: JSON.stringify({ messages }),
         signal,
       });
 

@@ -93,7 +93,7 @@ class KnowledgeBaseSemanticSearchTest extends TestCase
             ])
         ]);
 
-        $realSvc = new EmbeddingService();
+        $realSvc = new EmbeddingService(app(\App\Services\AI\RAG\EmbeddingCache::class));
 
         // 1. Query Europe region
         $resultsEurope = $realSvc->findSimilar('Give me the certifications', 'europe', 5);

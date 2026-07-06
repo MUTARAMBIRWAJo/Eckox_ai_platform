@@ -3,6 +3,7 @@
 namespace App\Services\AI;
 
 use App\Models\KnowledgeBase;
+use App\Services\AI\RAG\EmbeddingCache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use OpenAI\Laravel\Facades\OpenAI;
@@ -13,24 +14,46 @@ use OpenAI\Laravel\Facades\OpenAI;
  * Model: text-embedding-3-small (1536 dimensions, lowest cost, good quality for KB retrieval).
  * Storage: pgvector column on knowledge_base table.
  * Retrieval: cosine similarity via HNSW index.
+ * Caching: Redis-backed EmbeddingCache (7-day TTL) to avoid redundant API calls.
  */
 class EmbeddingService
 {
-    private const MODEL      = 'text-embedding-3-small';
     private const DIMENSIONS = 1536;
+
+    public function __construct(private readonly EmbeddingCache $cache) {}
+
+    /**
+     * Return the configured embedding model name.
+     */
+    public function getModel(): string
+    {
+        return config('llm.models.openai.embedding', 'text-embedding-3-small');
+    }
 
     /**
      * Generate an embedding vector for arbitrary text.
      * Returns a float[] of length DIMENSIONS.
+     * Results are cached in Redis for config('llm.cache.embeddings_ttl') seconds.
      */
     public function embed(string $text): array
     {
+        // Cache hit?
+        $cached = $this->cache->get($text);
+        if ($cached !== null) {
+            return $cached;
+        }
+
         $response = OpenAI::embeddings()->create([
-            'model' => self::MODEL,
+            'model' => $this->getModel(),
             'input' => $text,
         ]);
 
-        return $response->embeddings[0]->embedding;
+        $vector = $response->embeddings[0]->embedding;
+
+        // Store in cache
+        $this->cache->put($text, $vector);
+
+        return $vector;
     }
 
     /**
@@ -65,7 +88,7 @@ class EmbeddingService
     public function findSimilar(string $query, string $region, int $topK = 8): array
     {
         $queryVector = $this->embed($query);
-        $driver = DB::connection()->getDriverName();
+        $driver      = DB::connection()->getDriverName();
 
         if ($driver === 'pgsql') {
             $vectorLiteral = '[' . implode(',', $queryVector) . ']';
@@ -92,7 +115,7 @@ class EmbeddingService
                 'similarity'       => (float) $row->similarity,
             ], $rows);
         } else {
-            // PHP Cosine Similarity Fallback for SQLite testing/environments
+            // PHP Cosine Similarity Fallback for SQLite testing / non-backfilled environments
             $records = KnowledgeBase::where('region', $region)
                 ->where('is_active', true)
                 ->whereNotNull('embedding')
@@ -108,14 +131,16 @@ class EmbeddingService
 
                 // Cosine similarity = dot_product(A, B) / (norm(A) * norm(B))
                 $dotProduct = 0.0;
-                $normA = 0.0;
-                $normB = 0.0;
-                $len = min(count($queryVector), count($vector));
+                $normA      = 0.0;
+                $normB      = 0.0;
+                $len        = min(count($queryVector), count($vector));
+
                 for ($i = 0; $i < $len; $i++) {
                     $dotProduct += $queryVector[$i] * $vector[$i];
-                    $normA += $queryVector[$i] * $queryVector[$i];
-                    $normB += $vector[$i] * $vector[$i];
+                    $normA      += $queryVector[$i] * $queryVector[$i];
+                    $normB      += $vector[$i] * $vector[$i];
                 }
+
                 $normA = sqrt($normA);
                 $normB = sqrt($normB);
 
@@ -130,18 +155,9 @@ class EmbeddingService
                 ];
             }
 
-            // Sort by similarity descending
             usort($results, fn ($a, $b) => $b['similarity'] <=> $a['similarity']);
 
             return array_slice($results, 0, $topK);
         }
-    }
-
-    /**
-     * Returns the model name being used (for reporting/tests).
-     */
-    public function getModel(): string
-    {
-        return self::MODEL;
     }
 }

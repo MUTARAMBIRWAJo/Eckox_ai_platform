@@ -23,7 +23,7 @@ return [
     ],
 
     'ses' => [
-        'key' => env('AWS_ACCESS_KEY_ID'),
+        'key'    => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
@@ -31,7 +31,7 @@ return [
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
-            'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
+            'channel'              => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
 
@@ -42,12 +42,23 @@ return [
         'verify_token'    => env('WHATSAPP_VERIFY_TOKEN'),
         'platform_secret' => env('WHATSAPP_PLATFORM_SECRET'),
     ],
+
+    // ── LLM Providers ──────────────────────────────────────────────────────────
+    'openai' => [
+        'api_key' => env('OPENAI_API_KEY'),
+    ],
+
     'anthropic' => [
-        'key' => env('ANTHROPIC_API_KEY'),
+        'api_key' => env('ANTHROPIC_API_KEY'),
+        // Legacy alias — kept for backward compat with any code using config('services.anthropic.key')
+        'key'     => env('ANTHROPIC_API_KEY'),
     ],
 
     'groq' => [
-        'key' => env('GROQ_API_KEY'),
+        'api_key'  => env('GROQ_API_KEY'),
+        'base_url' => env('GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
+        // Legacy alias
+        'key'      => env('GROQ_API_KEY'),
     ],
 
 ];

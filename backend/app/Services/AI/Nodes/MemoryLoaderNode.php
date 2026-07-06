@@ -2,12 +2,16 @@
 
 namespace App\Services\AI\Nodes;
 
-use App\Models\AiMemory;
 use App\Services\AI\AgentNode;
 use App\Services\AI\AgentState;
+use App\Services\AI\Memory\ConversationMemory;
 
 class MemoryLoaderNode implements AgentNode
 {
+    public function __construct(
+        private readonly ConversationMemory $conversationMemory
+    ) {}
+
     public function handle(AgentState $state): AgentState
     {
         $startedAt = microtime(true);
@@ -18,26 +22,14 @@ class MemoryLoaderNode implements AgentNode
             return $state;
         }
 
-        // 1. Short-term Memory: load raw message history scrubbed of PII
+        // 1. Short-term Memory: load raw message history scrubbed of PII using the sliding window
         if ($state->lead) {
-            $state->history = $state->lead->inboundMessages()
-                ->latest()
-                ->take(10)
-                ->get()
-                ->map(fn ($m) => [
-                    'role'    => 'user',
-                    'content' => $this->redactPII($m->content),
-                ])
-                ->toArray();
+            $state->history = $this->conversationMemory->load($state);
         }
 
-        // 2. Long-term Memory: load summaries, behavioral notes, and products discussed
+        // 2. Long-term Memory: load summaries & behavioral notes from database
         if ($state->lead) {
-            $memories = AiMemory::where('lead_id', $state->lead->id)->get();
-            $state->promptPayload['long_term_memories'] = $memories->map(fn ($m) => [
-                'type'    => $m->memory_type,
-                'content' => $this->redactPII($m->content),
-            ])->toArray();
+            $state->promptPayload['long_term_memories'] = $this->conversationMemory->loadLongTermMemories($state->lead->id);
         } else {
             $state->promptPayload['long_term_memories'] = [];
         }
@@ -46,12 +38,5 @@ class MemoryLoaderNode implements AgentNode
         $state->latencyMs['memory_loader'] = (int) round((microtime(true) - $startedAt) * 1000);
 
         return $state;
-    }
-
-    private function redactPII(string $text): string
-    {
-        $text = preg_replace('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', '[REDACTED_EMAIL]', $text);
-        $text = preg_replace('/(?:\+?\d{1,4}[-.\s]?)?\(?\d{1,4}\)?(?:[-.\s]?\d{1,4}){3,6}/', '[REDACTED_PHONE]', $text);
-        return $text;
     }
 }

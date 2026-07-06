@@ -24,6 +24,17 @@ class AiActionsLog extends Model
         'guardrail_verdict',
         'decision_type',
         'action_executed',
+        // Observability additions
+        'provider',
+        'model_name',
+        'tokens_prompt',
+        'tokens_completion',
+        'cost_usd',
+        'retries',
+        'fallback_used',
+        'total_latency_ms',
+        'confidence_score',
+        'intent',
     ];
 
     protected $casts = [
@@ -32,6 +43,9 @@ class AiActionsLog extends Model
         'tool_calls'        => 'array',
         'guardrail_verdict' => 'array',
         'action_executed'   => 'array',
+        'cost_usd'          => 'decimal:8',
+        'confidence_score'  => 'decimal:4',
+        'fallback_used'     => 'boolean',
     ];
 
     protected static function booted(): void
