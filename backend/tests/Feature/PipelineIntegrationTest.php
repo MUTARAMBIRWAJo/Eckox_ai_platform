@@ -599,6 +599,7 @@ class PipelineIntegrationTest extends TestCase
         config([
             'services.anthropic.key' => 'fake_anthropic_key',
             'services.groq.key' => 'fake_groq_key',
+            'llm.routing.general' => 'openai',
         ]);
 
         // 1. Force OpenAI client to throw exception for the main LLM call
@@ -648,5 +649,55 @@ class PipelineIntegrationTest extends TestCase
 
         $this->assertEquals('reply', $decision->decision_type);
         $this->assertEquals('Groq reply success.', $decision->response['reply_text']);
+
+        // Inspect captured HTTP requests to verify prompt and tools
+        $recorded = \Illuminate\Support\Facades\Http::recorded();
+        
+        $anthropicRequests = collect($recorded)
+            ->filter(fn($r) => str_contains($r[0]->url(), 'api.anthropic.com'))
+            ->map(fn($r) => $r[0])
+            ->values();
+            
+        $groqRequests = collect($recorded)
+            ->filter(fn($r) => str_contains($r[0]->url(), 'api.groq.com'))
+            ->map(fn($r) => $r[0])
+            ->values();
+
+        $this->assertNotEmpty($anthropicRequests);
+        $this->assertNotEmpty($groqRequests);
+
+        $anthropicReq = $anthropicRequests[0];
+        $groqReq = $groqRequests->last();
+
+        $anthropicPayload = json_decode($anthropicReq->body(), true);
+        $groqPayload = json_decode($groqReq->body(), true);
+
+        // 1. Verify system prompt is identical
+        $systemPrompt = $anthropicPayload['system'];
+        $this->assertNotEmpty($systemPrompt);
+        $this->assertEquals($systemPrompt, $groqPayload['messages'][0]['content']);
+
+        // 2. Verify messages/context matches
+        // Groq message structure is standard OpenAI: [system, user]
+        // Anthropic message structure is mapped messages
+        $this->assertEquals('system', $groqPayload['messages'][0]['role']);
+        $this->assertEquals('user', $groqPayload['messages'][1]['role']);
+        $this->assertStringContainsString('Lead ID: 1', $groqPayload['messages'][1]['content']);
+        $this->assertStringContainsString('Hello team.', $groqPayload['messages'][1]['content']);
+
+        // Anthropic messages
+        $this->assertEquals('user', $anthropicPayload['messages'][0]['role']);
+        $this->assertStringContainsString('Lead ID: 1', $anthropicPayload['messages'][0]['content']);
+        $this->assertStringContainsString('Hello team.', $anthropicPayload['messages'][0]['content']);
+
+        // 3. Verify tool definitions map identically
+        $this->assertCount(10, $groqPayload['tools']);
+        $this->assertCount(10, $anthropicPayload['tools']);
+
+        // Verify some specific tool names map identically
+        $groqToolNames = collect($groqPayload['tools'])->map(fn($t) => $t['function']['name'])->toArray();
+        $anthropicToolNames = collect($anthropicPayload['tools'])->map(fn($t) => $t['name'])->toArray();
+        $this->assertEquals($groqToolNames, $anthropicToolNames);
+        $this->assertContains('create_quote_pdf', $groqToolNames);
     }
 }
