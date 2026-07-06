@@ -47,6 +47,15 @@ class LLMRouter
         $attempt  = 0;
 
         foreach ($chain as $providerName) {
+            // Skip disabled providers entirely (no attempt, no retry loop)
+            if (!$this->isProviderEnabled($providerName)) {
+                Log::channel('production')->info("LLMRouter: skipping [{$providerName}] — provider disabled (config)", [
+                    'trace_id' => $state->traceId,
+                    'intent'   => $state->intent,
+                ]);
+                continue;
+            }
+
             if (!$this->circuitBreaker->isAvailable($providerName)) {
                 Log::channel('production')->info("LLMRouter: skipping [{$providerName}] — circuit OPEN", [
                     'trace_id' => $state->traceId,
@@ -131,23 +140,35 @@ class LLMRouter
 
     /**
      * Return circuit breaker state for all providers (for diagnostics).
+     * Includes provider enabled/disabled status for observability.
      */
     public function diagnostics(): array
     {
         $out = [];
         foreach (array_keys($this->providers) as $name) {
             $out[$name] = [
+                'enabled'         => $this->isProviderEnabled($name),
                 'circuit_state'   => $this->circuitBreaker->getState($name),
                 'failure_count'   => $this->circuitBreaker->getFailureCount($name),
                 'model'           => $this->providers[$name]->model(),
                 'supports_vision' => $this->providers[$name]->supportsVision(),
                 'supports_tools'  => $this->providers[$name]->supportsTools(),
+                'reason'          => !$this->isProviderEnabled($name) ? config('llm.provider_status.' . $name . '.reason', 'unknown') : null,
             ];
         }
         return $out;
     }
 
     // ─── Private helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Check if a provider is enabled via config.
+     * Disabled providers are skipped without attempting a call.
+     */
+    private function isProviderEnabled(string $providerName): bool
+    {
+        return config('llm.providers_enabled.' . $providerName, true);
+    }
 
     /**
      * Build an ordered provider list starting from the intent-preferred provider.

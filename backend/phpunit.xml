@@ -33,5 +33,13 @@
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="OPENAI_API_KEY" value="sk-1234567890abcdefghijklmnopqrstuvwxyz"/>
+
+        <!-- LLM Provider Config for Tests: Use OpenAI with mocks instead of hitting Groq rate limit -->
+        <env name="LLM_DEFAULT_PROVIDER" value="openai"/>
+        <env name="LLM_FALLBACK_PROVIDER" value="anthropic"/>
+        <env name="LLM_SECOND_FALLBACK" value="groq"/>
+        <env name="LLM_PROVIDER_OPENAI_ENABLED" value="true"/>
+        <env name="LLM_PROVIDER_ANTHROPIC_ENABLED" value="true"/>
+        <env name="LLM_PROVIDER_GROQ_ENABLED" value="true"/>
     </php>
 </phpunit>

@@ -68,7 +68,6 @@ export default function ChatPage() {
         role: "assistant",
         content: "",
         timestamp: new Date(),
-        confidence: 95,
       };
 
       setMessages((prev) => [...prev, newMessage]);
@@ -144,7 +143,6 @@ export default function ChatPage() {
           role: "assistant",
           content: "",
           timestamp: new Date(),
-          confidence: 95,
         };
 
         setMessages((prev) => [...prev, newMessage]);
@@ -172,7 +170,7 @@ export default function ChatPage() {
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMessageId
-                ? { ...msg, content: "Sorry, I encountered an error. Please try again." }
+                ? { ...msg, content: "Sorry, I encountered an error. Please try again.", confidence: undefined, confidence: undefined }
                 : msg
             )
           );

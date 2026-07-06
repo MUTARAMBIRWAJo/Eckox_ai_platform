@@ -20,14 +20,26 @@ class HealthController extends Controller
     {
         $status = 'healthy';
         $checks = [];
+        $enabledProviderHealthy = false;
 
         // 1. LLM Providers Health
         foreach ($this->llmRouter->allProviders() as $name => $provider) {
             $health = $provider->health();
             $checks[$name] = $health;
-            if (!$health['healthy']) {
+
+            // Only mark as degraded if ENABLED provider is unhealthy
+            $isEnabled = config('llm.providers_enabled.' . $name, true);
+            if (!$health['healthy'] && $isEnabled) {
                 $status = 'degraded';
             }
+            if ($health['healthy'] && $isEnabled) {
+                $enabledProviderHealthy = true;
+            }
+        }
+
+        // If no enabled providers are healthy, mark as degraded
+        if (!$enabledProviderHealthy && $status === 'healthy') {
+            $status = 'degraded';
         }
 
         // 2. Redis
@@ -74,6 +86,6 @@ class HealthController extends Controller
             'timestamp' => now()->toIso8601String(),
             'checks' => $checks,
             'diagnostics' => $this->llmRouter->diagnostics(),
-        ], $status === 'healthy' ? 200 : 500);
+        ], $enabledProviderHealthy ? 200 : 503);  // 200 if LLM ready, 503 if no enabled providers healthy
     }
 }

@@ -25,18 +25,20 @@ class LLMRouterTest extends TestCase
         $this->assertInstanceOf(LLMRouter::class, $router);
 
         // Intention checks based on config routing
+        // TEMPORARY (2026-07): All intents prefer Groq due to OpenAI/Anthropic billing hold
         $reflector = new \ReflectionClass($router);
         $method = $reflector->getMethod('buildProviderChain');
         $method->setAccessible(true);
 
+        // All intents now prefer Groq as primary
         $chainGeneral = $method->invoke($router, 'general');
         $this->assertEquals('groq', $chainGeneral[0]);
 
         $chainBuy = $method->invoke($router, 'buy_intent');
-        $this->assertEquals('openai', $chainBuy[0]);
+        $this->assertEquals('groq', $chainBuy[0]); // Changed from 'openai' due to temporary config
 
         $chainLegal = $method->invoke($router, 'complaint_legal');
-        $this->assertEquals('anthropic', $chainLegal[0]);
+        $this->assertEquals('groq', $chainLegal[0]); // Changed from 'anthropic' due to temporary config
     }
 
     public function test_circuit_breaker_state_transitions()

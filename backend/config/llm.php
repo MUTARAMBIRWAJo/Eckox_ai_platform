@@ -7,11 +7,15 @@ return [
     | Default & Fallback Providers
     |--------------------------------------------------------------------------
     | Specifies the provider chain for general routing.
+    | TEMPORARY CONFIG (2026-07): Groq is primary due to OpenAI/Anthropic
+    | billing issues. Once billing is resolved, revert to original order by
+    | setting env vars: LLM_DEFAULT_PROVIDER=openai, LLM_FALLBACK_PROVIDER=anthropic
+    |
     | Individual intents can override via the 'routing' table below.
     */
-    'default'         => env('LLM_DEFAULT_PROVIDER', 'openai'),
+    'default'         => env('LLM_DEFAULT_PROVIDER', 'groq'),
     'fallback'        => env('LLM_FALLBACK_PROVIDER', 'anthropic'),
-    'second_fallback' => env('LLM_SECOND_FALLBACK', 'groq'),
+    'second_fallback' => env('LLM_SECOND_FALLBACK', 'openai'),
 
     /*
     |--------------------------------------------------------------------------
@@ -20,6 +24,21 @@ return [
     */
     'timeout' => (int) env('LLM_TIMEOUT', 30),
     'retries' => (int) env('LLM_MAX_RETRIES', 3),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Provider Enable/Disable Flags
+    |--------------------------------------------------------------------------
+    | TEMPORARY CONFIG (2026-07): Disable OpenAI and Anthropic due to billing
+    | issues. Set to true to re-enable once billing is resolved (no code
+    | changes required — only env var update). Disabled providers are skipped
+    | immediately in the fallback chain, not attempted and failed.
+    */
+    'providers_enabled' => [
+        'openai'    => (bool) env('LLM_PROVIDER_OPENAI_ENABLED', false),
+        'anthropic' => (bool) env('LLM_PROVIDER_ANTHROPIC_ENABLED', false),
+        'groq'      => (bool) env('LLM_PROVIDER_GROQ_ENABLED', true),
+    ],
 
     /*
     |--------------------------------------------------------------------------
@@ -59,28 +78,27 @@ return [
     | Intent-Based Routing Rules
     |--------------------------------------------------------------------------
     | Maps intent or task type → preferred provider.
+    | TEMPORARY: All routes now prefer Groq (primary). OpenAI/Anthropic routes
+    | remain defined for future restoration; fallback chain will skip disabled
+    | providers automatically.
     | If that provider's circuit is OPEN, LLMRouter falls back to the chain.
     */
     'routing' => [
-        // Fast, cost-efficient → Groq
+        // All intents → Groq (temporary, 2026-07)
         'general'            => 'groq',
         'summary'            => 'groq',
         'summarization'      => 'groq',
         'support_request'    => 'groq',
         'language_detection' => 'groq',
-
-        // Precision & tool-calling → OpenAI
-        'buy_intent'          => 'openai',
-        'document_generation' => 'openai',
-        'invoice'             => 'openai',
-        'quote'               => 'openai',
-        'knowledge_search'    => 'openai',
-
-        // Deep reasoning & compliance → Anthropic Claude
-        'complex_reasoning' => 'anthropic',
-        'long_reasoning'    => 'anthropic',
-        'complaint_legal'   => 'anthropic',
-        'agreement'         => 'anthropic',
+        'buy_intent'         => 'groq',
+        'document_generation' => 'groq',
+        'invoice'            => 'groq',
+        'quote'              => 'groq',
+        'knowledge_search'   => 'groq',
+        'complex_reasoning'  => 'groq',
+        'long_reasoning'     => 'groq',
+        'complaint_legal'    => 'groq',
+        'agreement'          => 'groq',
     ],
 
     /*
@@ -102,6 +120,19 @@ return [
         'window_size'     => (int) env('LLM_MEMORY_WINDOW', 10),
         'cache_ttl'       => (int) env('LLM_MEMORY_CACHE_TTL', 86400),  // 24 h
         'summarize_after' => (int) env('LLM_SUMMARIZE_AFTER', 20),      // turns
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Provider Observability Status (for health checks & dashboards)
+    |--------------------------------------------------------------------------
+    | Current active status of each provider — read-only, for monitoring.
+    | This reflects the enable/disable flags above. Updated at runtime.
+    */
+    'provider_status' => [
+        'openai'    => ['enabled' => false, 'reason' => 'billing_hold'],
+        'anthropic' => ['enabled' => false, 'reason' => 'billing_hold'],
+        'groq'      => ['enabled' => true, 'reason' => 'primary_active'],
     ],
 
     /*
