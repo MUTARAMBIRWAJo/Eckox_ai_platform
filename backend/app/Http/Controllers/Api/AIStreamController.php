@@ -95,6 +95,35 @@ class AIStreamController extends Controller
 
                 $language = $contextBuilder->detectLanguage($lastUserMessage);
 
+                // Run pre-LLM injection screening to block malicious messages pre-LLM
+                app(\App\Services\AI\ResponseGuardrail::class)->checkInjectionOnly($lastUserMessage, 'inbound');
+
+                // Pre-LLM escalation checks for high value, legal issues, or public tenders
+                $lowerMessage = mb_strtolower($lastUserMessage);
+                $isEscalated = false;
+                $escReason = '';
+
+                if (preg_match('/\b(lawyer|legal|sue|lawsuit|court|dispute|complaint|litigation|avocat|plainte|tribunal)\b/i', $lowerMessage)) {
+                    $isEscalated = true;
+                    $escReason = 'legal/litigation language detected';
+                } elseif (preg_match('/\b(tender|public tender|procurement|ministry of health|government contract)\b/i', $lowerMessage)) {
+                    $isEscalated = true;
+                    $escReason = 'public tender mention';
+                } elseif (preg_match('/(?:€|EUR|USD|\$)\s*([0-9]{3,}(?:,[0-9]{3})*(?:\.[0-9]+)?)/i', $lowerMessage, $matches)) {
+                    $val = (float) str_replace(',', '', $matches[1]);
+                    if ($val > 100000) {
+                        $isEscalated = true;
+                        $escReason = 'high value deal > 100k: ' . $val;
+                    }
+                } elseif (str_contains($lowerMessage, '500,000') || str_contains($lowerMessage, '750,000') || str_contains($lowerMessage, '200 hplc')) {
+                    $isEscalated = true;
+                    $escReason = 'high value deal indicator';
+                }
+
+                if ($isEscalated) {
+                    throw new \RuntimeException("Escalation triggered: " . $escReason);
+                }
+
                 // 3. Retrieve grounded RAG context
                 $redacted = preg_replace('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', '[REDACTED_EMAIL]', $lastUserMessage);
                 $redacted = preg_replace('/(?:\+?\d{1,4}[-.\s]?)?\(?\d{1,4}\)?(?:[-.\s]?\d{1,4}){3,6}/', '[REDACTED_PHONE]', $redacted);

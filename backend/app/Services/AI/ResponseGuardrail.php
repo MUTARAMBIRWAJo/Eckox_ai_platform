@@ -150,9 +150,31 @@ class ResponseGuardrail
     private function detectInjection(string $text, string $direction): void
     {
         $lower = mb_strtolower($text);
+        
+        // 1. Exact pattern matches
         foreach (self::INJECTION_PATTERNS as $pattern) {
             if (mb_strpos($lower, $pattern) !== false) {
                 throw new \RuntimeException("Prompt Injection detected on {$direction} text: Matches rule [{$pattern}].");
+            }
+        }
+
+        // 2. Flexible regex matches for prompt injections
+        $regexes = [
+            '/ignore.*instructions/i',
+            '/ignore.*rules/i',
+            '/reveal.*prompt/i',
+            '/reveal.*instructions/i',
+            '/system.*prompt/i',
+            '/internal.*configuration/i',
+            '/internal.*config/i',
+            '/forget.*instructions/i',
+            '/forget.*rules/i',
+            '/ignore.*previous/i',
+        ];
+
+        foreach ($regexes as $rx) {
+            if (preg_match($rx, $lower)) {
+                throw new \RuntimeException("Prompt Injection detected on {$direction} text via regex rule: {$rx}.");
             }
         }
     }
