@@ -19,7 +19,10 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => array_filter(explode(',', (string) env('ALLOWED_ORIGINS', 'http://localhost:3000,https://eckox.ai'))),
+    'allowed_origins' => array_merge(
+        array_filter(explode(',', (string) env('ALLOWED_ORIGINS', 'http://localhost:3000,https://eckox.ai'))),
+        ['https://eckox-ai-platform.vercel.app']
+    ),
 
     'allowed_origins_patterns' => [],
 
