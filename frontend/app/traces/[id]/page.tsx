@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AIAPI, TraceLog } from "@/lib/api/ai.api";
-import { authAPI, AuthUser } from "@/lib/api";
-import { Activity, ArrowRight, CheckCircle2, AlertTriangle, Cpu, Terminal, Shield, ArrowLeft, Clock } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import { AlertTriangle, CheckCircle2, Cpu, Terminal, Shield, ArrowLeft, Clock } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
@@ -16,22 +16,23 @@ export default function TraceViewerPage() {
   const traceId = params?.id as string;
 
   const [trace, setTrace] = useState<TraceLog | null>(null);
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const { user, logout } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
+      setLoading(true);
+      setError(null);
       try {
-        const [currentUser, traceRes] = await Promise.all([
-          authAPI.getCurrentUser(),
-          AIAPI.getTrace(traceId),
-        ]);
-        setUser(currentUser);
+        const traceRes = await AIAPI.getTrace(traceId);
         if (traceRes.success && traceRes.data) {
           setTrace(traceRes.data);
+        } else {
+          setError(traceRes.error || "Trace log not found.");
         }
-      } catch (err) {
-        console.error("Failed to load trace:", err);
+      } catch (err: any) {
+        setError(err.message || "Failed to load trace telemetry data.");
       } finally {
         setLoading(false);
       }
@@ -44,7 +45,7 @@ export default function TraceViewerPage() {
 
   if (loading) {
     return (
-      <AppLayout headerProps={{ user, onLogout: () => {} }}>
+      <AppLayout headerProps={{ user: user ? { name: user.name, email: user.email } : undefined, onLogout: () => logout() }}>
         <div className="flex items-center justify-center h-[60vh]">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500" />
         </div>
@@ -52,14 +53,14 @@ export default function TraceViewerPage() {
     );
   }
 
-  if (!trace) {
+  if (error || !trace) {
     return (
-      <AppLayout headerProps={{ user, onLogout: () => {} }}>
-        <div className="text-center p-12">
+      <AppLayout headerProps={{ user: user ? { name: user.name, email: user.email } : undefined, onLogout: () => logout() }}>
+        <div className="text-center p-12 max-w-md mx-auto">
           <AlertTriangle className="w-16 h-16 mx-auto text-amber-500 mb-4" />
           <h2 className="text-2xl font-bold">Trace Not Found</h2>
-          <p className="text-muted-foreground mt-2">Could not find trace logs matching ID "{traceId}".</p>
-          <Link href="/conversations" className="mt-4 inline-block">
+          <p className="text-muted-foreground mt-2">{error || `Could not find trace logs matching ID "${traceId}".`}</p>
+          <Link href="/conversations" className="mt-6 inline-block">
             <Button variant="outline">Back to Escalations</Button>
           </Link>
         </div>
@@ -70,8 +71,8 @@ export default function TraceViewerPage() {
   return (
     <AppLayout
       headerProps={{
-        user,
-        onLogout: () => window.location.href = "/login",
+        user: user ? { name: user.name, email: user.email, avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=" + user.email } : undefined,
+        onLogout: () => logout(),
       }}
     >
       <div className="space-y-6">
@@ -113,31 +114,35 @@ export default function TraceViewerPage() {
               <CardDescription>Order and duration of executed state graph nodes</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="relative border-l-2 border-border pl-6 ml-4 space-y-6">
-                {trace.nodePath.map((node, idx) => {
-                  const latency = trace.latencyMs[node] || 0;
-                  return (
-                    <div key={idx} className="relative">
-                      {/* Node Bullet */}
-                      <span className="absolute -left-[31px] top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-border border-2 border-background">
-                        <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                      </span>
-                      <div className="flex items-center justify-between gap-4 p-3 bg-secondary/20 rounded-xl border border-border hover:bg-secondary/40 transition-colors">
-                        <div>
-                          <p className="text-sm font-semibold capitalize text-foreground">
-                            {node.replace("_", " ")}
-                          </p>
-                          <span className="text-[10px] text-muted-foreground">Step {idx + 1}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-                          <span className="text-xs font-mono">{latency}ms</span>
+              {trace.nodePath?.length ? (
+                <div className="relative border-l-2 border-border pl-6 ml-4 space-y-6">
+                  {trace.nodePath.map((node, idx) => {
+                    const latency = trace.latencyMs?.[node] || 0;
+                    return (
+                      <div key={idx} className="relative">
+                        {/* Node Bullet */}
+                        <span className="absolute -left-[31px] top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-border border-2 border-background">
+                          <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        </span>
+                        <div className="flex items-center justify-between gap-4 p-3 bg-secondary/20 rounded-xl border border-border hover:bg-secondary/40 transition-colors">
+                          <div>
+                            <p className="text-sm font-semibold capitalize text-foreground">
+                              {node.replace("_", " ")}
+                            </p>
+                            <span className="text-[10px] text-muted-foreground">Step {idx + 1}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+                            <span className="text-xs font-mono">{latency}ms</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No node execution details found.</p>
+              )}
             </CardContent>
           </Card>
 
@@ -151,19 +156,19 @@ export default function TraceViewerPage() {
               <CardContent className="space-y-4">
                 <div className="flex justify-between items-center py-2 border-b border-border">
                   <span className="text-xs text-muted-foreground">Lead Name</span>
-                  <span className="text-sm font-semibold">{trace.leadName}</span>
+                  <span className="text-sm font-semibold">{trace.leadName || "—"}</span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-border">
                   <span className="text-xs text-muted-foreground">LLM Provider</span>
                   <Badge className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                     <Cpu className="w-3.5 h-3.5 mr-1" />
-                    {trace.llmProvider.toUpperCase()}
+                    {(trace.llmProvider || "unknown").toUpperCase()}
                   </Badge>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-border">
                   <span className="text-xs text-muted-foreground">Decision Type</span>
-                  <Badge variant="outline" className="capitalize">
-                    {trace.decisionType}
+                  <Badge variant="outline" className="capitalize text-xs">
+                    {trace.decisionType || "unknown"}
                   </Badge>
                 </div>
                 {trace.actionExecuted && (
@@ -171,7 +176,7 @@ export default function TraceViewerPage() {
                     <span className="text-xs text-muted-foreground">Channel Status</span>
                     <span className="text-xs text-emerald-500 flex items-center gap-1 font-semibold">
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      {trace.actionExecuted.channel.toUpperCase()} ({trace.actionExecuted.status})
+                      {trace.actionExecuted.channel?.toUpperCase()} ({trace.actionExecuted.status})
                     </span>
                   </div>
                 )}
@@ -184,7 +189,7 @@ export default function TraceViewerPage() {
                 <CardTitle className="text-lg">Database Tool Calls</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {trace.toolCalls.length === 0 ? (
+                {!trace.toolCalls || trace.toolCalls.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No tool calls executed in this trace.</p>
                 ) : (
                   trace.toolCalls.map((tool, idx) => (
@@ -229,7 +234,7 @@ export default function TraceViewerPage() {
                         <div>
                           <p className="text-xs font-semibold text-rose-500">Guardrail Violated</p>
                           <div className="mt-1 space-y-1">
-                            {trace.guardrailVerdict.errors.map((err, i) => (
+                            {trace.guardrailVerdict.errors?.map((err, i) => (
                               <p key={i} className="text-[10px] text-muted-foreground">• {err}</p>
                             ))}
                           </div>

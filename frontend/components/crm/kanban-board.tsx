@@ -2,11 +2,8 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { MoreHorizontal, Plus } from "lucide-react";
-import { Lead } from "@/lib/data/leads";
+import { Lead } from "@/lib/api/crm.api";
 
 interface KanbanColumn {
   id: string;
@@ -18,8 +15,6 @@ const COLUMNS: KanbanColumn[] = [
   { id: "new", title: "New", color: "border-l-blue-500 dark:border-l-blue-400" },
   { id: "contacted", title: "Contacted", color: "border-l-purple-500 dark:border-l-purple-400" },
   { id: "qualified", title: "Qualified", color: "border-l-yellow-500 dark:border-l-yellow-400" },
-  { id: "proposal", title: "Proposal", color: "border-l-orange-500 dark:border-l-orange-400" },
-  { id: "won", title: "Won", color: "border-l-green-500 dark:border-l-green-400" },
   { id: "lost", title: "Lost", color: "border-l-red-500 dark:border-l-red-400" },
 ];
 
@@ -64,16 +59,11 @@ export function KanbanBoard({ leads, onSelectLead, onUpdateLeadStatus }: KanbanB
             className="flex-shrink-0 w-80 flex flex-col"
           >
             {/* Column Header */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold">{column.title}</h3>
-                <Badge variant="secondary" className="bg-muted">
-                  {ledsByStatus[column.id].length}
-                </Badge>
-              </div>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <Plus className="h-4 w-4" />
-              </Button>
+            <div className="flex items-center gap-2 mb-4">
+              <h3 className="font-semibold">{column.title}</h3>
+              <Badge variant="secondary" className="bg-muted">
+                {ledsByStatus[column.id].length}
+              </Badge>
             </div>
 
             {/* Column Cards Area */}
@@ -96,42 +86,48 @@ export function KanbanBoard({ leads, onSelectLead, onUpdateLeadStatus }: KanbanB
                   <div
                     className={`p-3 rounded-lg border-l-4 hover:shadow-md transition-all cursor-pointer bg-card ${column.color} hover:scale-105 transform`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate">
-                          {lead.name}
-                        </p>
+                    <div className="flex flex-col gap-1">
+                      <p className="font-medium text-sm truncate">
+                        {lead.name}
+                      </p>
+                      {lead.email && (
                         <p className="text-xs text-muted-foreground truncate">
-                          {lead.company}
+                          {lead.email}
                         </p>
-                        <div className="flex gap-1 mt-2">
+                      )}
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {lead.score !== undefined && lead.score !== null && (
                           <Badge
                             variant="outline"
-                            className="text-xs bg-primary/10 text-primary border-0"
+                            className="text-[10px] bg-primary/10 text-primary border-0"
                           >
                             {lead.score}% score
                           </Badge>
+                        )}
+                        {lead.country && (
                           <Badge
                             variant="outline"
-                            className="text-xs"
+                            className="text-[10px]"
                           >
                             {lead.country}
                           </Badge>
-                        </div>
+                        )}
+                        {lead.phone && (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px]"
+                          >
+                            {lead.phone}
+                          </Badge>
+                        )}
                       </div>
-                      <button
-                        className="h-6 w-6 flex-shrink-0 rounded hover:bg-secondary transition-colors flex items-center justify-center"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <MoreHorizontal className="h-3 w-3" />
-                      </button>
                     </div>
                   </div>
                 </motion.div>
               ))}
 
               {ledsByStatus[column.id].length === 0 && (
-                <div className="flex items-center justify-center h-96 text-muted-foreground text-sm">
+                <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
                   No leads yet
                 </div>
               )}

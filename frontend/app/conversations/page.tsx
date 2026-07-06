@@ -5,74 +5,51 @@ import { AppLayout } from "@/components/layout/app-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AIAPI, EscalationRecord } from "@/lib/api/ai.api";
-import { authAPI, AuthUser } from "@/lib/api";
-import { AlertCircle, CheckCircle2, ShieldAlert, Zap, Globe, MessageSquare, Terminal, Eye } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import { AlertCircle, CheckCircle2, ShieldAlert, Zap, Globe, Eye, RefreshCw } from "lucide-react";
 import Link from "next/link";
 
 export default function ConversationsPage() {
+  const { user, logout } = useAuth();
   const [escalations, setEscalations] = useState<EscalationRecord[]>([]);
   const [selectedEsc, setSelectedEsc] = useState<EscalationRecord | null>(null);
   const [selectedReason, setSelectedReason] = useState<string>("all");
-  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [replyText, setReplyText] = useState("");
   const [takeoverStatus, setTakeoverStatus] = useState<Record<string, boolean>>({});
-  const [wsConnected, setWsConnected] = useState(true); // Reverb connection state
+  const [wsConnected] = useState(true); // Active Reverb connection state representation
   const listRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [currentUser, escRes] = await Promise.all([
-          authAPI.getCurrentUser(),
-          AIAPI.getEscalations(),
-        ]);
-        setUser(currentUser);
-        if (escRes.success && escRes.data) {
-          setEscalations(escRes.data);
-          if (escRes.data.length > 0) {
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const escRes = await AIAPI.getEscalations();
+      if (escRes.success && escRes.data) {
+        setEscalations(escRes.data);
+        if (escRes.data.length > 0) {
+          // Keep current selected if it still exists in the new list, otherwise default to first
+          const stillExists = escRes.data.find(e => e.id === selectedEsc?.id);
+          if (!stillExists) {
             setSelectedEsc(escRes.data[0]);
+          } else {
+            setSelectedEsc(stillExists);
           }
+        } else {
+          setSelectedEsc(null);
         }
-      } catch (err) {
-        console.error("Failed to load conversations:", err);
-      } finally {
-        setLoading(false);
       }
-    };
+    } catch (err) {
+      console.error("Failed to load conversations:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
+  useEffect(() => {
     loadData();
-
-    // Laravel Reverb WebSockets simulation
-    const interval = setInterval(() => {
-      // Simulate real-time arrival of a new escalated conversation
-      const newEsc: EscalationRecord = {
-        id: `esc_${Date.now()}`,
-        traceId: `trace_${Math.floor(Math.random() * 1000)}`,
-        leadId: '3',
-        leadName: 'Objection Specialist',
-        reason: 'low_confidence',
-        content: 'Is your processor CE certified in the EU?',
-        region: 'europe',
-        language: 'en',
-        history: [
-          { sender: 'lead', content: 'Is your processor CE certified in the EU?', timestamp: new Date().toISOString() }
-        ],
-        createdAt: new Date().toISOString(),
-      };
-      setEscalations((prev) => {
-        // Only append if it's not already there and limit duplication
-        if (prev.length < 5) {
-          return [newEsc, ...prev];
-        }
-        return prev;
-      });
-    }, 45000);
-
-    return () => clearInterval(interval);
   }, []);
 
   const handleTakeover = async (traceId: string) => {
@@ -115,8 +92,10 @@ export default function ConversationsPage() {
   return (
     <AppLayout
       headerProps={{
-        user,
-        onLogout: () => window.location.href = "/login",
+        user: user
+          ? { name: user.name, email: user.email, avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=" + user.email }
+          : undefined,
+        onLogout: () => logout(),
       }}
     >
       <div className="space-y-6">
@@ -130,11 +109,17 @@ export default function ConversationsPage() {
               Act on safety blocks, compliance alerts, and manual agent overrides.
             </p>
           </div>
-          <div className="flex items-center gap-2 bg-secondary/50 px-3 py-1.5 rounded-full border border-border self-start">
-            <span className={`w-2.5 h-2.5 rounded-full ${wsConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-            <span className="text-xs font-semibold text-muted-foreground">
-              {wsConnected ? 'Reverb Connected' : 'Reverb Offline'}
-            </span>
+          <div className="flex items-center gap-3 self-start md:self-center">
+            <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
+              <RefreshCw className={`w-4 h-4 mr-1.5 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+            <div className="flex items-center gap-2 bg-secondary/50 px-3 py-1.5 rounded-full border border-border">
+              <span className={`w-2.5 h-2.5 rounded-full ${wsConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+              <span className="text-xs font-semibold text-muted-foreground">
+                {wsConnected ? 'Reverb Connected' : 'Reverb Offline'}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -165,36 +150,46 @@ export default function ConversationsPage() {
             </CardHeader>
             <ScrollArea className="flex-1">
               <div className="space-y-2 p-4" ref={listRef} role="listbox" aria-label="Escalated conversations list">
-                {filteredEscalations.map((esc, index) => (
-                  <button
-                    key={esc.id}
-                    onClick={() => setSelectedEsc(esc)}
-                    role="option"
-                    aria-selected={selectedEsc?.id === esc.id}
-                    className={`w-full text-left p-4 rounded-xl transition-all border ${
-                      selectedEsc?.id === esc.id
-                        ? "bg-emerald-500/10 border-emerald-500/40 shadow-sm"
-                        : "bg-secondary/15 hover:bg-secondary/40 border-border"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <span className="font-semibold text-sm text-foreground">{esc.leadName}</span>
-                      <Badge className={getReasonBadgeColor(esc.reason)}>
-                        {esc.reason.replace("_", " ")}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground line-clamp-2 mb-3">
-                      "{esc.content}"
-                    </p>
-                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Globe className="w-3 h-3" />
-                        {esc.region.toUpperCase()} ({esc.language})
-                      </span>
-                      <span>{new Date(esc.createdAt).toLocaleTimeString()}</span>
-                    </div>
-                  </button>
-                ))}
+                {loading && escalations.length === 0 ? (
+                  <div className="flex items-center justify-center h-32">
+                    <RefreshCw className="w-6 h-6 animate-spin text-primary" />
+                  </div>
+                ) : filteredEscalations.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-muted-foreground">
+                    No matching escalations found.
+                  </div>
+                ) : (
+                  filteredEscalations.map((esc) => (
+                    <button
+                      key={esc.id}
+                      onClick={() => setSelectedEsc(esc)}
+                      role="option"
+                      aria-selected={selectedEsc?.id === esc.id}
+                      className={`w-full text-left p-4 rounded-xl transition-all border ${
+                        selectedEsc?.id === esc.id
+                          ? "bg-emerald-500/10 border-emerald-500/40 shadow-sm"
+                          : "bg-secondary/15 hover:bg-secondary/40 border-border"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <span className="font-semibold text-sm text-foreground">{esc.leadName}</span>
+                        <Badge className={getReasonBadgeColor(esc.reason)}>
+                          {esc.reason.replace("_", " ")}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground line-clamp-2 mb-3">
+                        "{esc.content}"
+                      </p>
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <Globe className="w-3 h-3" />
+                          {esc.region.toUpperCase()} ({esc.language})
+                        </span>
+                        <span>{new Date(esc.createdAt).toLocaleTimeString()}</span>
+                      </div>
+                    </button>
+                  ))
+                )}
               </div>
             </ScrollArea>
           </Card>
@@ -223,7 +218,7 @@ export default function ConversationsPage() {
 
               <ScrollArea className="flex-1 p-4">
                 <div className="space-y-4">
-                  {selectedEsc.history.map((msg, idx) => (
+                  {selectedEsc.history?.map((msg, idx) => (
                     <div
                       key={idx}
                       className={`flex gap-3 ${msg.sender === 'user' || msg.sender === 'assistant' ? "justify-end" : ""}`}
@@ -270,7 +265,7 @@ export default function ConversationsPage() {
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') handleTakeover(selectedEsc.traceId);
                         }}
-                        className="flex-1 input-base rounded-xl px-4 py-2 bg-background border border-border focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                        className="flex-1 input-base rounded-xl px-4 py-2 bg-background border border-border focus:ring-2 focus:ring-emerald-500 focus:outline-none text-foreground"
                       />
                       <Button
                         onClick={() => handleTakeover(selectedEsc.traceId)}

@@ -35,6 +35,9 @@ export const ROUTE_ROLE_MAP: Record<string, string[]> = {
   '/knowledge': ['sales-agent', 'manager', 'admin', 'super-admin'],
   '/notifications': ['sales-agent', 'manager', 'admin', 'super-admin'],
   '/settings': ['sales-agent', 'manager', 'admin', 'super-admin'],
+  // Manager/Admin only pages
+  '/marketing': ['manager', 'admin', 'super-admin'],
+  '/traces': ['manager', 'admin', 'super-admin'],
 };
 
 /**

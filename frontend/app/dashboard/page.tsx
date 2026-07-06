@@ -4,65 +4,65 @@ import { useEffect, useState } from "react";
 import { AppLayout } from "@/components/layout/app-layout";
 import { PageTransition } from "@/components/layout/page-transition";
 import { KPICard } from "@/components/common/kpi-card";
-import { KPICardSkeleton } from "@/components/common/skeleton-loader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, Users, FileText, Target, ShieldAlert, AlertTriangle, Play, CheckCircle2, RefreshCw } from "lucide-react";
-import { dashboardAPI } from "@/lib/api";
-import { AIAPI } from "@/lib/api/ai.api";
+import { TrendingUp, Users, Target, CheckCircle2, ShieldAlert, RefreshCw } from "lucide-react";
+import { DashboardAPI, DashboardStats, ProviderHealth } from "@/lib/api/dashboard.api";
 import { useAuth } from "@/hooks/use-auth";
-import { LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import {
+  BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 import { getChartColors } from "@/lib/chart-colors";
 
 export default function DashboardPage() {
   const { user, logout } = useAuth();
-  const [kpis, setKpis] = useState<any[]>([]);
-  const [revenueChart, setRevenueChart] = useState<any[]>([]);
-  const [funnelChart, setFunnelChart] = useState<any[]>([]);
-  const [healthData, setHealthData] = useState<any[]>([]);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [healthData, setHealthData] = useState<ProviderHealth[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Alerts
-  const [alerts, setAlerts] = useState<string[]>([
-    "Low stock warning: SKU-PROC-X is down to 4 units.",
-    "Anthropic provider latency exceeded SLA thresholds (1200ms avg).",
-    "Factual guardrail retry blocked a mismatch on SKU-SERV-HUB price quote."
-  ]);
+  const loadDashboard = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [statsRes, healthRes] = await Promise.all([
+        DashboardAPI.getStats(),
+        DashboardAPI.getProviderHealth(),
+      ]);
 
-  useEffect(() => {
-    const loadDashboard = async () => {
-      try {
-        const [kpiData, revenue, funnel, healthRes] = await Promise.all([
-          dashboardAPI.getKPIs(),
-          dashboardAPI.getRevenueChart(),
-          dashboardAPI.getFunnelChart(),
-          AIAPI.getProviderHealth()
-        ]);
-
-        setKpis(kpiData);
-        setRevenueChart(revenue);
-        setFunnelChart(funnel);
-        if (healthRes.success && healthRes.data) {
-          setHealthData(healthRes.data);
-        }
-      } catch (err) {
-        console.error("Failed to load dashboard:", err);
-      } finally {
-        setLoading(false);
+      if (statsRes.success && statsRes.data) {
+        setStats(statsRes.data);
+      } else {
+        setError(statsRes.error || "Failed to load dashboard stats.");
       }
-    };
 
-    loadDashboard();
-  }, []);
+      if (healthRes.success && healthRes.data) {
+        setHealthData(healthRes.data);
+      }
+    } catch (err: any) {
+      setError("Could not reach the backend. Please check your connection.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadDashboard(); }, []);
+
+  const chartColors = getChartColors();
+
+  // Build KPI values from real backend data
+  const totalLeads = stats?.pipeline?.reduce((sum, s) => sum + s.count, 0) ?? 0;
+  const conversionRate = stats?.conversionRate ?? 0;
+  const avgLatencyS = stats ? (stats.avgLatencyMs / 1000).toFixed(1) : "—";
+  const totalDecisions = stats?.totalDecisions ?? 0;
 
   return (
     <AppLayout
       headerProps={{
-        user: user ? {
-          name: user.name,
-          email: user.email,
-          avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=" + user.email,
-        } : undefined,
+        user: user
+          ? { name: user.name, email: user.email, avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=" + user.email }
+          : undefined,
         onLogout: () => logout(),
       }}
     >
@@ -72,112 +72,171 @@ export default function DashboardPage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-500 bg-clip-text text-transparent">
-                Executive & Graph Monitor
+                Executive Monitor
               </h1>
               <p className="text-muted-foreground mt-1 text-sm">
-                Real-time operational dashboard for Eckox AI Sales graph state, latencies, and pipeline metrics.
+                Live pipeline metrics and AI system health from your backend.
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-3">
               {user?.roles?.map((role) => (
                 <span key={role} className="px-3 py-1 rounded-full bg-emerald-500/20 text-xs font-semibold text-emerald-400 capitalize border border-emerald-500/30">
                   {role}
                 </span>
               ))}
+              <Button variant="outline" size="sm" onClick={loadDashboard} disabled={loading}>
+                <RefreshCw className={`w-4 h-4 mr-1.5 ${loading ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
             </div>
           </div>
 
-          {/* Alert Ticker banner */}
-          <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-4 space-y-2">
-            <h3 className="text-xs font-bold text-rose-400 flex items-center gap-1.5">
-              <ShieldAlert className="w-4 h-4" /> Real-time Contextual Alerts (FR-5.5)
-            </h3>
-            <ul className="text-xs text-muted-foreground list-disc pl-5 space-y-1">
-              {alerts.map((alert, idx) => (
-                <li key={idx}>{alert}</li>
-              ))}
-            </ul>
-          </div>
+          {/* Error banner */}
+          {error && !loading && (
+            <div className="bg-destructive/10 border border-destructive/20 rounded-2xl p-4 text-sm text-destructive">
+              <ShieldAlert className="inline w-4 h-4 mr-2" />
+              {error}
+            </div>
+          )}
 
           {/* KPI Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {loading ? (
-              Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-32 bg-secondary/20 rounded animate-pulse" />)
+              Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-32 bg-secondary/20 rounded-2xl animate-pulse" />
+              ))
             ) : (
               <>
-                <KPICard title="Pipeline Value" value="$2.4M" change={12.5} icon={<TrendingUp className="w-4 h-4" />} />
-                <KPICard title="Conversations" value="48 active" change={-2.1} icon={<Users className="w-4 h-4" />} />
-                <KPICard title="AI Latency (Avg)" value="1.6s" change={4.2} icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} />
-                <KPICard title="NFR Latency Target" value="20.0s SLA" change={0.0} icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} />
+                <KPICard
+                  title="Total Pipeline Leads"
+                  value={String(totalLeads)}
+                  change={0}
+                  icon={<Users className="w-4 h-4" />}
+                />
+                <KPICard
+                  title="AI Conversion Rate"
+                  value={`${conversionRate}%`}
+                  change={0}
+                  icon={<Target className="w-4 h-4" />}
+                />
+                <KPICard
+                  title="Avg AI Latency"
+                  value={`${avgLatencyS}s`}
+                  change={0}
+                  icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                />
+                <KPICard
+                  title="Total AI Decisions"
+                  value={String(totalDecisions)}
+                  change={0}
+                  icon={<TrendingUp className="w-4 h-4" />}
+                />
               </>
             )}
           </div>
 
           {/* Charts Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Sales Pipeline & Forecasting */}
+            {/* Pipeline Stages */}
             <Card className="border-border bg-card/60 backdrop-blur-md">
               <CardHeader>
-                <CardTitle>Pipeline Stages & Forecasts (FR-5.6)</CardTitle>
-                <CardDescription>Funnel analysis combined with 30-day linear projection forecasts.</CardDescription>
+                <CardTitle>Pipeline Stages</CardTitle>
+                <CardDescription>Lead counts by status from your backend CRM.</CardDescription>
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="h-64 bg-secondary/20 rounded animate-pulse" />
+                  <div className="h-56 bg-secondary/20 rounded animate-pulse" />
+                ) : stats?.pipeline?.length ? (
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={stats.pipeline}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartColors.gridStroke} />
+                      <XAxis dataKey="stage" stroke={chartColors.axisStroke} tick={{ fontSize: 11 }} />
+                      <YAxis stroke={chartColors.axisStroke} />
+                      <Tooltip contentStyle={{ backgroundColor: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}` }} />
+                      <Bar dataKey="count" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
                 ) : (
-                  <div className="space-y-4">
-                    <ResponsiveContainer width="100%" height={220}>
-                      <BarChart data={funnelChart}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={getChartColors().gridStroke} />
-                        <XAxis dataKey="stage" stroke={getChartColors().axisStroke} />
-                        <YAxis stroke={getChartColors().axisStroke} />
-                        <Tooltip contentStyle={{ backgroundColor: getChartColors().tooltipBg, border: `1px solid ${getChartColors().tooltipBorder}` }} />
-                        <Bar dataKey="count" fill="#10b981" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                    <div className="p-3 bg-secondary/15 rounded-xl border border-border">
-                      <p className="text-xs font-bold text-foreground">Next Month projection: $680K predicted</p>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Based on historical win velocity and graph conversion rates.</p>
-                    </div>
+                  <div className="h-56 flex items-center justify-center text-sm text-muted-foreground">
+                    No pipeline data available yet.
                   </div>
                 )}
               </CardContent>
             </Card>
 
-            {/* Provider Health Panel (Section 5) */}
+            {/* Provider Health */}
             <Card className="border-border bg-card/60 backdrop-blur-md">
               <CardHeader>
-                <CardTitle>Multi-LLM Provider Metrics</CardTitle>
-                <CardDescription>Request distribution, latency profiles, and routing failovers.</CardDescription>
+                <CardTitle>Multi-LLM Provider Health</CardTitle>
+                <CardDescription>Request volume, failovers, and latency per provider.</CardDescription>
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="h-64 bg-secondary/20 rounded animate-pulse" />
-                ) : (
+                  <div className="h-56 bg-secondary/20 rounded animate-pulse" />
+                ) : healthData.length ? (
                   <div className="space-y-4">
-                    <ResponsiveContainer width="100%" height={220}>
+                    <ResponsiveContainer width="100%" height={180}>
                       <BarChart data={healthData} layout="vertical">
-                        <CartesianGrid strokeDasharray="3 3" stroke={getChartColors().gridStroke} />
-                        <XAxis type="number" stroke={getChartColors().axisStroke} />
-                        <YAxis dataKey="name" type="category" stroke={getChartColors().axisStroke} width={120} />
-                        <Tooltip contentStyle={{ backgroundColor: getChartColors().tooltipBg, border: `1px solid ${getChartColors().tooltipBorder}` }} />
-                        <Bar dataKey="volume" fill="#06b6d4" />
+                        <CartesianGrid strokeDasharray="3 3" stroke={chartColors.gridStroke} />
+                        <XAxis type="number" stroke={chartColors.axisStroke} />
+                        <YAxis dataKey="name" type="category" stroke={chartColors.axisStroke} width={130} tick={{ fontSize: 10 }} />
+                        <Tooltip contentStyle={{ backgroundColor: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}` }} />
+                        <Bar dataKey="volume" fill="#06b6d4" radius={[0, 4, 4, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                     <div className="grid grid-cols-3 gap-2 text-center">
-                      {healthData.map((provider) => (
-                        <div key={provider.name} className="p-2 bg-secondary/20 rounded-xl border border-border">
-                          <p className="text-[10px] font-semibold truncate text-muted-foreground">{provider.name.split(' ')[0]}</p>
-                          <p className="text-xs font-extrabold text-foreground mt-0.5">{provider.latency}ms</p>
+                      {healthData.map((p) => (
+                        <div key={p.name} className="p-2 bg-secondary/20 rounded-xl border border-border">
+                          <p className="text-[10px] font-semibold truncate text-muted-foreground">{p.name.split(" ")[0]}</p>
+                          <p className="text-xs font-extrabold text-foreground mt-0.5">{p.latency}ms</p>
+                          <p className="text-[9px] text-muted-foreground">{p.failovers} failovers</p>
                         </div>
                       ))}
                     </div>
                   </div>
+                ) : (
+                  <div className="h-56 flex items-center justify-center text-sm text-muted-foreground">
+                    No provider health data available yet.
+                  </div>
                 )}
               </CardContent>
             </Card>
 
-            {/* Recurring Objections Panel */}
+            {/* AI Latency Trend — uses real avgLatencyMs */}
+            <Card className="border-border bg-card/60 backdrop-blur-md">
+              <CardHeader>
+                <CardTitle>AI Graph Latency</CardTitle>
+                <CardDescription>Average LLM reasoning latency vs 20s NFR-1 target.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {loading ? (
+                  <div className="h-48 bg-secondary/20 rounded animate-pulse" />
+                ) : (
+                  <ResponsiveContainer width="100%" height={180}>
+                    <AreaChart
+                      data={[
+                        { label: "Current Avg", latency: stats ? stats.avgLatencyMs / 1000 : 0 },
+                        { label: "NFR-1 SLA", latency: 20 },
+                      ]}
+                    >
+                      <defs>
+                        <linearGradient id="latencyGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
+                          <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartColors.gridStroke} />
+                      <XAxis dataKey="label" stroke={chartColors.axisStroke} />
+                      <YAxis stroke={chartColors.axisStroke} />
+                      <Tooltip contentStyle={{ backgroundColor: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}` }} />
+                      <Area type="monotone" dataKey="latency" stroke="#10b981" fillOpacity={1} fill="url(#latencyGrad)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Objection metrics — no backend endpoint */}
             <Card className="border-border bg-card/60 backdrop-blur-md">
               <CardHeader>
                 <CardTitle>Customer Objection Metrics</CardTitle>
@@ -185,41 +244,12 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent className="flex items-center justify-center h-48 bg-secondary/10 rounded-2xl border border-dashed border-border text-center p-6">
                 <div>
-                  <AlertTriangle className="w-8 h-8 text-amber-500/60 mx-auto mb-2" />
-                  <p className="text-xs font-semibold text-foreground">Objection Pipeline Inactive</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">The conversational analytics and objection-extraction parser is not active on the backend.</p>
+                  <ShieldAlert className="w-8 h-8 text-amber-500/60 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-foreground">No Backend Endpoint Available</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Conversational objection analytics require a dedicated backend endpoint not yet implemented.
+                  </p>
                 </div>
-              </CardContent>
-            </Card>
-
-            {/* Latency compliance to NFR-1 target */}
-            <Card className="border-border bg-card/60 backdrop-blur-md">
-              <CardHeader>
-                <CardTitle>AI Graph Latency Trend</CardTitle>
-                <CardDescription>Latency tracking compared to the 20-second NFR-1 target limit.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={180}>
-                  <AreaChart data={[
-                    { time: "09:00", latency: 1.2 },
-                    { time: "10:00", latency: 2.5 },
-                    { time: "11:00", latency: 1.8 },
-                    { time: "12:00", latency: 3.2 },
-                    { time: "13:00", latency: 1.5 },
-                  ]}>
-                    <defs>
-                      <linearGradient id="latencyGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={getChartColors().gridStroke} />
-                    <XAxis dataKey="time" stroke={getChartColors().axisStroke} />
-                    <YAxis stroke={getChartColors().axisStroke} />
-                    <Tooltip contentStyle={{ backgroundColor: getChartColors().tooltipBg, border: `1px solid ${getChartColors().tooltipBorder}` }} />
-                    <Area type="monotone" dataKey="latency" stroke="#10b981" fillOpacity={1} fill="url(#latencyGrad)" />
-                  </AreaChart>
-                </ResponsiveContainer>
               </CardContent>
             </Card>
           </div>

@@ -15,6 +15,7 @@ import {
   Settings,
   Menu,
   X,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
@@ -39,6 +40,7 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
   { label: "Knowledge Base", href: "/knowledge", icon: <BookOpen className="w-4 h-4" /> },
   { label: "Analytics", href: "/analytics", icon: <BarChart3 className="w-4 h-4" /> },
   { label: "Automation", href: "/automation", icon: <Zap className="w-4 h-4" /> },
+  { label: "Marketing Approvals", href: "/marketing/approvals", icon: <ShieldCheck className="w-4 h-4" /> },
   { label: "Notifications", href: "/notifications", icon: <Bell className="w-4 h-4" /> },
   { label: "Settings", href: "/settings", icon: <Settings className="w-4 h-4" /> },
 ];

@@ -1,197 +1,47 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { AppLayout } from "@/components/layout/app-layout";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { authAPI, AuthUser } from "@/lib/api";
-import { Plus, Workflow, Zap, Trash2 } from "lucide-react";
-
-const AUTOMATIONS = [
-  {
-    id: 1,
-    name: "Auto-qualify high-value leads",
-    description: "Automatically qualify leads with deal value > $50K",
-    status: "active",
-    trigger: "Lead Value > $50K",
-    action: "Mark as Qualified",
-    executions: 127,
-  },
-  {
-    id: 2,
-    name: "Send follow-up emails",
-    description: "Send email reminder 3 days after quote sent",
-    status: "active",
-    trigger: "Quote Sent",
-    action: "Send Email",
-    executions: 312,
-  },
-  {
-    id: 3,
-    name: "Slack notifications for closed deals",
-    description: "Notify team on Slack when deal is closed",
-    status: "active",
-    trigger: "Deal Closed",
-    action: "Send Slack Message",
-    executions: 89,
-  },
-  {
-    id: 4,
-    name: "Archive inactive leads",
-    description: "Archive leads with no activity for 60 days",
-    status: "inactive",
-    trigger: "No Activity 60 Days",
-    action: "Archive Lead",
-    executions: 0,
-  },
-  {
-    id: 5,
-    name: "Update CRM on product purchase",
-    description: "Automatically update CRM when product is purchased",
-    status: "active",
-    trigger: "Product Purchased",
-    action: "Update CRM Field",
-    executions: 54,
-  },
-];
+import { Card, CardContent } from "@/components/ui/card";
+import { useAuth } from "@/hooks/use-auth";
+import { Workflow, Info } from "lucide-react";
 
 export default function AutomationPage() {
-  const [automations, setAutomations] = useState(AUTOMATIONS);
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadUser = async () => {
-      try {
-        const currentUser = await authAPI.getCurrentUser();
-        setUser(currentUser);
-      } catch (err) {
-        console.error("Failed to load user:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadUser();
-  }, []);
-
-  const toggleAutomation = (id: number) => {
-    setAutomations((prevs) =>
-      prevs.map((auto) =>
-        auto.id === id
-          ? { ...auto, status: auto.status === "active" ? "inactive" : "active" }
-          : auto
-      )
-    );
-  };
-
-  const deleteAutomation = (id: number) => {
-    setAutomations((prevs) => prevs.filter((auto) => auto.id !== id));
-  };
-
-  const activeCount = automations.filter((a) => a.status === "active").length;
-  const totalExecutions = automations.reduce((sum, a) => sum + a.executions, 0);
+  const { user, logout } = useAuth();
 
   return (
     <AppLayout
       headerProps={{
-        user,
-        onLogout: () => window.location.href = "/login",
+        user: user
+          ? { name: user.name, email: user.email, avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=" + user.email }
+          : undefined,
+        onLogout: () => logout(),
       }}
     >
-      <div className="space-y-6">
+      <div className="space-y-6 max-w-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">Automation</h1>
-            <p className="text-muted-foreground mt-1">Create workflows to automate repetitive tasks</p>
-          </div>
-          <Button className="btn-primary gap-2">
-            <Plus className="w-4 h-4" />
-            New Automation
-          </Button>
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-500 bg-clip-text text-transparent">
+            Workflow Automation
+          </h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Create rules and actions to automate CRM lead processes.
+          </p>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="card">
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold">{activeCount}</div>
-              <p className="text-xs text-muted-foreground">Active Automations</p>
-            </CardContent>
-          </Card>
-          <Card className="card">
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold">{automations.length}</div>
-              <p className="text-xs text-muted-foreground">Total</p>
-            </CardContent>
-          </Card>
-          <Card className="card">
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold">{totalExecutions}</div>
-              <p className="text-xs text-muted-foreground">Total Executions</p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Automations List */}
-        <div className="space-y-3">
-          {automations.map((automation) => (
-            <Card key={automation.id} className="card hover:shadow-md transition-shadow">
-              <CardContent className="pt-6">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-4 flex-1">
-                    <div className="mt-1">
-                      <Workflow className="w-5 h-5 text-muted-foreground" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-semibold">{automation.name}</h3>
-                        <Badge 
-                          className={automation.status === "active" 
-                            ? "bg-primary/10 text-primary" 
-                            : "bg-secondary"}
-                        >
-                          {automation.status}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground mb-3">{automation.description}</p>
-                      <div className="flex gap-4 text-xs text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                          <span className="font-medium">Trigger:</span>
-                          <span>{automation.trigger}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="font-medium">Action:</span>
-                          <span>{automation.action}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="font-medium">Runs:</span>
-                          <span>{automation.executions}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <Switch
-                      checked={automation.status === "active"}
-                      onCheckedChange={() => toggleAutomation(automation.id)}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => deleteAutomation(automation.id)}
-                    >
-                      <Trash2 className="w-4 h-4 text-destructive" />
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        {/* Automation Inactive State */}
+        <Card className="border-border bg-card/60 backdrop-blur-md">
+          <CardContent className="pt-12 pb-12 flex flex-col items-center justify-center text-center p-6">
+            <Workflow className="w-12 h-12 text-muted-foreground/30 mb-3 animate-pulse" />
+            <h3 className="text-base font-semibold text-foreground">Automation Rules Inactive</h3>
+            <p className="text-xs text-muted-foreground mt-1.5 max-w-sm">
+              The workflow automation and orchestration system is managed directly via the AI Sales Agent's LangGraph routing logic.
+            </p>
+            <div className="mt-6 flex items-start gap-2 bg-secondary/20 p-3 rounded-xl border border-border text-[10px] text-muted-foreground text-left max-w-sm">
+              <Info className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+              <span>To build custom routing flows or automate lead notifications, configure the reasoning pathways inside the AI Sales Agent config file.</span>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </AppLayout>
   );

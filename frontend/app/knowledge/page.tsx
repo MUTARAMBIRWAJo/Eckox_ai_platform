@@ -6,12 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AIAPI, KBEntry } from "@/lib/api/ai.api";
-import { authAPI, AuthUser } from "@/lib/api";
+import { useAuth } from "@/hooks/use-auth";
 import { Plus, Search, BookOpen, Trash2, Eye, ShieldAlert, Sparkles, HelpCircle, Save } from "lucide-react";
 
 export default function KnowledgeBasePage() {
   const [entries, setEntries] = useState<KBEntry[]>([]);
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const { user, logout } = useAuth();
   const [loading, setLoading] = useState(true);
 
   // Form State
@@ -26,11 +26,7 @@ export default function KnowledgeBasePage() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [currentUser, kbRes] = await Promise.all([
-          authAPI.getCurrentUser(),
-          AIAPI.getKBEntries(),
-        ]);
-        setUser(currentUser);
+        const kbRes = await AIAPI.getKBEntries();
         if (kbRes.success && kbRes.data) {
           setEntries(kbRes.data);
         }
@@ -95,8 +91,10 @@ export default function KnowledgeBasePage() {
   return (
     <AppLayout
       headerProps={{
-        user,
-        onLogout: () => window.location.href = "/login",
+        user: user
+          ? { name: user.name, email: user.email, avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=" + user.email }
+          : undefined,
+        onLogout: () => logout(),
       }}
     >
       <div className="space-y-6">
