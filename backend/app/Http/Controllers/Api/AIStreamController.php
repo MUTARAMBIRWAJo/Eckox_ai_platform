@@ -153,11 +153,31 @@ class AIStreamController extends Controller
                 }
 
                 // 4. Construct grounded system prompt
+                $conversationMemory = app(\App\Services\AI\Memory\ConversationMemory::class);
+                $longTermMemories = $lead ? $conversationMemory->loadLongTermMemories($lead->id) : [];
+
                 $systemPrompt = "You are a helpful B2B sales assistant for EckoX AI Platform.\n";
                 $systemPrompt .= "You must adhere to the following rules:\n";
                 $systemPrompt .= "1. NO-HALLUCINATION RULE: Only state prices, specifications, delivery dates, or compliance certificates that are explicitly mentioned in the Grounded Retrieval Context below. If the information is not present, politely say you will confirm with the team and follow up.\n";
                 $systemPrompt .= "2. Ground your response in the provided context. If the user asks about products, certificates, or delivery, rely only on the Grounded Retrieval Context.\n";
-                $systemPrompt .= "3. Respond in a natural conversational tone, direct and helpful, in language: {$language}.\n\n";
+
+                // Tone adjustment based on region
+                if ($region === 'europe') {
+                    $systemPrompt .= "3. TONE: Use a formal, professional B2B tone. Write in complete, polite sentences with standard business greetings.\n";
+                } else {
+                    $systemPrompt .= "3. TONE: Use a practical, direct, and action-oriented B2B tone. Be concise and focus on timelines (e.g. 15 business days delivery) and logistics.\n";
+                }
+                $systemPrompt .= "4. Respond in language: {$language}.\n\n";
+
+                // Format long-term memories
+                if (!empty($longTermMemories)) {
+                    $systemPrompt .= "[CONVERSATION MEMORY: Prior Topics/Summaries]\n";
+                    foreach ($longTermMemories as $m) {
+                        $systemPrompt .= "- " . $m['content'] . "\n";
+                    }
+                    $systemPrompt .= "Note: The above points are context from prior turns. Do not confuse them with verified facts in the GROUNDED RETRIEVAL CONTEXT below.\n\n";
+                }
+
                 $systemPrompt .= "GROUNDED RETRIEVAL CONTEXT:\n";
                 if (empty($groundedContextText)) {
                     $systemPrompt .= "No grounded context is available for this query.\n";
@@ -178,6 +198,11 @@ class AIStreamController extends Controller
                         ob_flush();
                     }
                     flush();
+                }
+
+                // Append exchange to conversation memory history
+                if ($lead) {
+                    $conversationMemory->append($lead->id, $lastUserMessage, $fullReply, $providerName);
                 }
 
                 // Save assistant message to conversation if it was a conversation-based request

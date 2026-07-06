@@ -62,6 +62,7 @@ class ResponseGuardrail
         // 2. Outbound Prompt Injection check
         $replyText = $decodedLLMResponse['reply_text'] ?? '';
         $this->detectInjection($replyText, 'outbound');
+        $this->checkInternalLeak($replyText);
 
         // 3. Price and specification verification against source DB context
         $citedFacts = $decodedLLMResponse['cited_facts'] ?? [];
@@ -175,6 +176,41 @@ class ResponseGuardrail
         foreach ($regexes as $rx) {
             if (preg_match($rx, $lower)) {
                 throw new \RuntimeException("Prompt Injection detected on {$direction} text via regex rule: {$rx}.");
+            }
+        }
+    }
+
+    /**
+     * Scan outbound text to prevent any accidental leakage of internal-only product info.
+     */
+    private function checkInternalLeak(string $replyText): void
+    {
+        $lowerReply = mb_strtolower($replyText);
+        
+        // Query products bypassing hidden attribute restrictions to scan actual values
+        $products = Product::all();
+        foreach ($products as $product) {
+            // Check cost basis
+            if ($product->cost_basis !== null) {
+                $costVal = (string) (float)$product->cost_basis;
+                $formattedCost = number_format((float)$product->cost_basis, 2);
+                if (str_contains($lowerReply, $costVal) || str_contains($lowerReply, $formattedCost)) {
+                    throw new \RuntimeException("Data leak detected: Response contains internal cost basis value.");
+                }
+            }
+            // Check supplier name
+            if ($product->supplier_name !== null) {
+                $supplier = mb_strtolower($product->supplier_name);
+                if (str_contains($lowerReply, $supplier)) {
+                    throw new \RuntimeException("Data leak detected: Response contains internal supplier name.");
+                }
+            }
+            // Check margin percent
+            if ($product->margin_percent !== null) {
+                $marginVal = (string) (float)$product->margin_percent;
+                if (str_contains($lowerReply, $marginVal)) {
+                    throw new \RuntimeException("Data leak detected: Response contains internal profit margin value.");
+                }
             }
         }
     }
