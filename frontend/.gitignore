@@ -13,3 +13,6 @@ __v0_jsx-dev-runtime.ts
 node_modules
 .next/
 .DS_Store
+# Production env file — contains API URLs, never commit real secrets
+.env.production
+.env.staging

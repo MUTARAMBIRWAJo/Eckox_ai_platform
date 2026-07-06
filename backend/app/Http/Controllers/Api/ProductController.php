@@ -8,6 +8,7 @@ use App\Models\ProductAuditLog;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Auth\Access\AuthorizationException;
 
 class ProductController extends Controller
 {
@@ -19,6 +20,11 @@ class ProductController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        // Only admin, manager, super-admin may create products
+        if (!Auth::user()?->hasAnyRole(['admin', 'manager', 'super-admin'])) {
+            abort(403, 'Unauthorized: insufficient role to create products');
+        }
+
         $data = $request->validate([
             'name' => 'required|string|unique:products',
             'sku' => 'required|string|unique:products',
@@ -45,6 +51,11 @@ class ProductController extends Controller
 
     public function update(Request $request, Product $product): JsonResponse
     {
+        // Only admin, manager, super-admin may update products
+        if (!Auth::user()?->hasAnyRole(['admin', 'manager', 'super-admin'])) {
+            abort(403, 'Unauthorized: insufficient role to update products');
+        }
+
         $data = $request->validate([
             'price_eur' => 'numeric',
             'price_usd' => 'numeric',
@@ -98,6 +109,11 @@ class ProductController extends Controller
 
     public function destroy(Product $product): JsonResponse
     {
+        // Only admin and super-admin may delete products
+        if (!Auth::user()?->hasAnyRole(['admin', 'super-admin'])) {
+            abort(403, 'Unauthorized: insufficient role to delete products');
+        }
+
         $sku = $product->sku;
         $product->delete();
 

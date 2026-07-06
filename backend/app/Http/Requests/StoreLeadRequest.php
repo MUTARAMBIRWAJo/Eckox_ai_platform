@@ -23,11 +23,20 @@ class StoreLeadRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'email', 'max:255'],
-            'phone' => ['nullable', 'string', 'max:20'],
-            'status' => ['nullable', 'string', 'in:new,contacted,qualified,lost'],
-            'assigned_to' => ['nullable', 'integer', 'exists:users,id'],
+            'name'           => ['required', 'string', 'max:255'],
+            'email'          => ['required', 'string', 'email', 'max:255', 'unique:leads,email'],
+            'phone'          => ['nullable', 'string', 'max:20'],
+            'status'         => ['nullable', 'string', 'in:new,contacted,qualified,lost'],
+            'source_channel' => ['nullable', 'string', 'max:50'],
+            'region'         => ['nullable', 'string', 'in:africa,europe,middle_east,americas,asia'],
+            'language'       => ['nullable', 'string', 'max:10'],
+            'assigned_to'    => ['nullable', 'integer', 'exists:users,id'],
         ];
     }
-}
+
+    public function messages(): array
+    {
+        return [
+            'email.unique' => 'A lead with this email address already exists.',
+        ];
+    }

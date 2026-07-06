@@ -47,16 +47,31 @@ class WhatsAppWebhookController extends Controller
         $signature = $request->header('X-360Dialog-Signature');
         $secret    = config('services.whatsapp.platform_secret') ?: env('WHATSAPP_PLATFORM_SECRET');
 
-        if ($secret) {
-            $computed = hash_hmac('sha256', $request->getContent(), $secret);
-            if (!hash_equals($computed, (string) $signature)) {
-                Log::channel('production')->warning('WhatsApp webhook signature mismatch', [
-                    'computed' => $computed,
-                    'header'   => $signature,
-                    'trace_id' => $traceId,
-                ]);
-                return response()->json(['error' => 'Invalid signature'], 401);
-            }
+        // Security: ALWAYS enforce signature — never process unsigned requests
+        if (empty($secret)) {
+            Log::channel('production')->critical('WhatsApp WHATSAPP_PLATFORM_SECRET not configured — rejecting webhook', [
+                'ip'       => $request->ip(),
+                'trace_id' => $traceId,
+            ]);
+            return response()->json(['error' => 'Webhook signing secret not configured'], 503);
+        }
+
+        if (empty($signature)) {
+            Log::channel('production')->warning('WhatsApp webhook missing X-360Dialog-Signature header', [
+                'ip'       => $request->ip(),
+                'trace_id' => $traceId,
+            ]);
+            return response()->json(['error' => 'Missing signature header'], 401);
+        }
+
+        $computed = hash_hmac('sha256', $request->getContent(), $secret);
+        if (!hash_equals($computed, (string) $signature)) {
+            Log::channel('production')->warning('WhatsApp webhook signature mismatch', [
+                'computed' => $computed,
+                'header'   => $signature,
+                'trace_id' => $traceId,
+            ]);
+            return response()->json(['error' => 'Invalid signature'], 401);
         }
 
         $payload = $request->all();
