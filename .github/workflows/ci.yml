@@ -73,3 +73,34 @@ jobs:
         DB_PASSWORD: postgres
         DB_SSLMODE: disable
         OPENAI_API_KEY: sk-1234567890abcdefghijklmnopqrstuvwxyz
+
+  frontend-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10.34.4
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: frontend/pnpm-lock.yaml
+
+    - name: Install Dependencies (Frozen Lockfile Verification)
+      run: |
+        cd frontend
+        pnpm install --frozen-lockfile
+
+    - name: Build Frontend
+      run: |
+        cd frontend
+        pnpm run build
+      env:
+        NEXT_PUBLIC_API_URL: https://eckox-ai-platform.onrender.com/api
+
