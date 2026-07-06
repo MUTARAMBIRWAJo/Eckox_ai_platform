@@ -19,6 +19,7 @@ use OpenAI\Laravel\Facades\OpenAI;
 class EmbeddingService
 {
     private const DIMENSIONS = 1536;
+    public const ACTIVE_MODEL = 'bge-small-en-v1.5-padded';
 
     public function __construct(private readonly EmbeddingCache $cache) {}
 
@@ -93,7 +94,10 @@ class EmbeddingService
         // Store as pgvector literal: '[0.1, 0.2, ...]'
         DB::table('knowledge_base')
             ->where('id', $kb->id)
-            ->update(['embedding' => '[' . implode(',', $vector) . ']']);
+            ->update([
+                'embedding' => '[' . implode(',', $vector) . ']',
+                'embedding_model' => self::ACTIVE_MODEL
+            ]);
 
         Log::channel('production')->info('KB embedding stored', [
             'kb_id'      => $kb->id,
@@ -129,9 +133,10 @@ class EmbeddingService
                  WHERE region = ?
                    AND is_active = true
                    AND embedding IS NOT NULL
+                   AND embedding_model = ?
                  ORDER BY embedding <=> ?
                  LIMIT ?',
-                [$vectorLiteral, $region, $vectorLiteral, $topK]
+                [$vectorLiteral, $region, self::ACTIVE_MODEL, $vectorLiteral, $topK]
             );
 
             return array_map(fn ($row) => [
@@ -146,6 +151,7 @@ class EmbeddingService
             $records = KnowledgeBase::where('region', $region)
                 ->where('is_active', true)
                 ->whereNotNull('embedding')
+                ->where('embedding_model', self::ACTIVE_MODEL)
                 ->get();
 
             $results = [];
