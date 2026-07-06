@@ -121,7 +121,7 @@ class AIStreamController extends Controller
                 }
 
                 if ($isEscalated) {
-                    throw new \RuntimeException("Escalation triggered: " . $escReason);
+                    throw new \App\Exceptions\B2BEscalationException($escReason);
                 }
 
                 // 3. Retrieve grounded RAG context
@@ -264,7 +264,12 @@ class AIStreamController extends Controller
                     ]);
                 }
 
-                echo "data: " . json_encode(['error' => 'Our AI assistant is temporarily unavailable. A human agent will respond shortly.']) . "\n\n";
+                $msg = 'Our AI assistant is temporarily unavailable. A human agent will respond shortly.';
+                if ($e instanceof \App\Exceptions\B2BEscalationException) {
+                    $msg = 'Thank you for the details. Given the scope of this request, I am connecting you with one of our B2B sales specialists who will follow up shortly.';
+                }
+
+                echo "data: " . json_encode(['error' => $msg]) . "\n\n";
                 if (ob_get_level() > 0) {
                     ob_flush();
                 }

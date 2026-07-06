@@ -30,11 +30,6 @@ class EmbeddingService
         return config('llm.models.openai.embedding', 'text-embedding-3-small');
     }
 
-    /**
-     * Generate an embedding vector for arbitrary text.
-     * Returns a float[] of length DIMENSIONS.
-     * Results are cached in Redis for config('llm.cache.embeddings_ttl') seconds.
-     */
     public function embed(string $text): array
     {
         // Cache hit?
@@ -43,17 +38,49 @@ class EmbeddingService
             return $cached;
         }
 
-        $response = OpenAI::embeddings()->create([
-            'model' => $this->getModel(),
-            'input' => $text,
-        ]);
+        $token = env('HF_TOKEN');
+        if (empty($token)) {
+            throw new \Exception("Hugging Face API token (HF_TOKEN) is not configured in environment.");
+        }
 
-        $vector = $response->embeddings[0]->embedding;
+        $ch = curl_init('https://router.huggingface.co/hf-inference/models/BAAI/bge-small-en-v1.5');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode([
+                'inputs' => $text,
+                'options' => ['wait_for_model' => true]
+            ]),
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $token,
+                'Content-Type: application/json',
+            ],
+            CURLOPT_TIMEOUT => 15,
+        ]);
+        
+        $res = curl_exec($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        $vector = json_decode($res, true);
+        
+        if ($status !== 200 || !is_array($vector)) {
+            $errorMsg = is_array($vector) && isset($vector['error']) ? $vector['error'] : $res;
+            throw new \Exception("Hugging Face Embedding API failed with status $status: $errorMsg");
+        }
+
+        // Pad the 384-dimensional vector to 1536 dimensions to match pgvector schema
+        $padded = array_pad($vector, self::DIMENSIONS, 0.0);
+        
+        // Normalize the padded vector to unit length
+        $sumSq = array_sum(array_map(fn($x) => $x * $x, $padded));
+        $norm = sqrt($sumSq) ?: 1.0;
+        $normalizedVector = array_map(fn($x) => $x / $norm, $padded);
 
         // Store in cache
-        $this->cache->put($text, $vector);
+        $this->cache->put($text, $normalizedVector);
 
-        return $vector;
+        return $normalizedVector;
     }
 
     /**

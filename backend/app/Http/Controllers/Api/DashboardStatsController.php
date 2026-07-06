@@ -46,15 +46,19 @@ class DashboardStatsController extends Controller
 
     public function providerHealth(): JsonResponse
     {
-        // Compile OpenAI / Anthropic / Groq volume, failovers, and average latency
         $providers = ['openai', 'anthropic', 'groq'];
         $health = [];
+        $since = now()->subHours(2);
 
         foreach ($providers as $prov) {
-            $volume = AiActionsLog::where('llm_provider', $prov)->count();
+            $volume = AiActionsLog::where('llm_provider', $prov)
+                ->where('created_at', '>=', $since)
+                ->count();
             
-            // Average latency (database-agnostic calculation in PHP)
-            $providerLogs = AiActionsLog::where('llm_provider', $prov)->get();
+            $providerLogs = AiActionsLog::where('llm_provider', $prov)
+                ->where('created_at', '>=', $since)
+                ->get();
+                
             $providerLatencies = [];
             foreach ($providerLogs as $log) {
                 if (isset($log->latency_ms['llm_reasoning'])) {
@@ -63,20 +67,37 @@ class DashboardStatsController extends Controller
             }
             $avgLatency = count($providerLatencies) > 0 
                 ? (array_sum($providerLatencies) / count($providerLatencies)) 
-                : ($prov === 'openai' ? 850 : ($prov === 'anthropic' ? 1200 : 250));
+                : 0;
 
-            // Failover count: where LLM reasoning failed and we fallback to next
-            // In our system, this corresponds to warnings or fallback actions
             $failovers = 0;
             if ($prov === 'openai') {
-                $failovers = AiActionsLog::whereNull('llm_provider')->count();
+                $failovers = AiActionsLog::whereNull('llm_provider')
+                    ->where('created_at', '>=', $since)
+                    ->count();
             }
 
+            $isEnabled = config("llm.providers_enabled.{$prov}", false);
+            
+            if (!$isEnabled) {
+                $status = 'disabled';
+                $statusSuffix = ' (Disabled)';
+            } elseif ($volume === 0) {
+                $status = 'unavailable';
+                $statusSuffix = ' (Unavailable)';
+            } else {
+                $status = 'active';
+                $statusSuffix = '';
+            }
+
+            $baseName = $prov === 'groq' ? 'Groq LLaMA' : ($prov === 'anthropic' ? 'Anthropic Claude' : 'OpenAI (Primary)');
+            $fullName = $baseName . $statusSuffix;
+
             $health[] = [
-                'name' => ucfirst($prov === 'groq' ? 'Groq LLaMA' : ($prov === 'anthropic' ? 'Anthropic Claude' : 'OpenAI (Primary)')),
-                'volume' => $volume ?: ($prov === 'openai' ? 1450 : ($prov === 'anthropic' ? 12 : 2)),
-                'failovers' => $failovers ?: ($prov === 'openai' ? 12 : ($prov === 'anthropic' ? 2 : 0)),
-                'latency' => round($avgLatency),
+                'name'      => $fullName,
+                'volume'    => $volume,
+                'failovers' => $failovers,
+                'latency'   => round($avgLatency),
+                'status'    => $status,
             ];
         }
 
