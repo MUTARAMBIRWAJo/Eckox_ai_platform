@@ -139,6 +139,12 @@ class GroqProvider implements LLMProviderInterface
             'stream'      => true,
         ]);
 
+        if (!$response->successful()) {
+            throw new \RuntimeException(
+                'Groq API stream error ' . $response->status() . ': ' . $this->sanitiseErrorBody($response->body())
+            );
+        }
+
         foreach (explode("\n", $response->body()) as $line) {
             if (str_starts_with($line, 'data: ') && $line !== 'data: [DONE]') {
                 $data  = json_decode(substr($line, 6), true);

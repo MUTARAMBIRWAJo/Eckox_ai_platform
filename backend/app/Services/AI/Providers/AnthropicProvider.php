@@ -151,6 +151,12 @@ class AnthropicProvider implements LLMProviderInterface
             'stream'     => true,
         ]);
 
+        if (!$response->successful()) {
+            throw new \RuntimeException(
+                'Anthropic API stream error ' . $response->status() . ': ' . $this->sanitiseErrorBody($response->body())
+            );
+        }
+
         // Parse SSE stream from Anthropic
         foreach (explode("\n", $response->body()) as $line) {
             if (str_starts_with($line, 'data: ')) {
