@@ -40,3 +40,5 @@ class StoreLeadRequest extends FormRequest
             'email.unique' => 'A lead with this email address already exists.',
         ];
     }
+}
+
