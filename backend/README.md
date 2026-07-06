@@ -53,6 +53,20 @@ In order to ensure that the Laravel community is welcoming to all, please review
 
 If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
 
+## Local Test Environment Setup (Postgres + pgvector)
+
+To run the full suite of integration tests (including the pgvector cosine similarity test) locally without skipping, you must spin up a local PostgreSQL container with the pgvector extension enabled:
+
+```bash
+docker run -d --name pgvector_test -p 5432:5432 -e POSTGRES_DB=laravel_test -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres ankane/pgvector:latest
+```
+
+Then, configure the testing environment variables in your command line or `.env` when running `php artisan test`:
+
+```bash
+DB_CONNECTION=sqlite DB_DATABASE=:memory: DB_HOST=127.0.0.1 DB_PORT=5432 DB_DATABASE=laravel_test DB_USERNAME=postgres DB_PASSWORD=postgres DB_SSLMODE=disable php artisan test --filter=KnowledgeBaseSemanticSearchTest
+```
+
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).

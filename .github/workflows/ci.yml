@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  laravel-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: ankane/pgvector:latest
+        env:
+          POSTGRES_DB: laravel_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: mbstring, dom, curl, libxml, zip, pdo, sqlite, pdo_sqlite, pdo_pgsql, bcmath
+        coverage: none
+
+    - name: Install Composer Dependencies
+      run: |
+        cd backend
+        composer install --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+    - name: Prepare Backend Environment
+      run: |
+        cd backend
+        cp .env.example .env
+        php artisan key:generate
+
+    - name: Run Database Migrations (Postgres + pgvector)
+      run: |
+        cd backend
+        php artisan migrate --force
+      env:
+        DB_CONNECTION: pgsql
+        DB_HOST: 127.0.0.1
+        DB_PORT: 5432
+        DB_DATABASE: laravel_test
+        DB_USERNAME: postgres
+        DB_PASSWORD: postgres
+        DB_SSLMODE: disable
+
+    - name: Run Tests (Including pgvector real Postgres execution)
+      run: |
+        cd backend
+        php artisan test
+      env:
+        DB_CONNECTION: sqlite
+        DB_DATABASE: :memory:
+        DB_HOST: 127.0.0.1
+        DB_PORT: 5432
+        DB_DATABASE: laravel_test
+        DB_USERNAME: postgres
+        DB_PASSWORD: postgres
+        DB_SSLMODE: disable
+        OPENAI_API_KEY: sk-1234567890abcdefghijklmnopqrstuvwxyz
