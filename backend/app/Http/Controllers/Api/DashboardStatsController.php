@@ -53,9 +53,17 @@ class DashboardStatsController extends Controller
         foreach ($providers as $prov) {
             $volume = AiActionsLog::where('llm_provider', $prov)->count();
             
-            // Average latency
-            $avgLatency = floatval(AiActionsLog::where('llm_provider', $prov)
-                ->avg(DB::raw("CAST(json_extract(latency_ms, '$.llm_reasoning') AS REAL)")) ?? ($prov === 'openai' ? 850 : ($prov === 'anthropic' ? 1200 : 250)));
+            // Average latency (database-agnostic calculation in PHP)
+            $providerLogs = AiActionsLog::where('llm_provider', $prov)->get();
+            $providerLatencies = [];
+            foreach ($providerLogs as $log) {
+                if (isset($log->latency_ms['llm_reasoning'])) {
+                    $providerLatencies[] = floatval($log->latency_ms['llm_reasoning']);
+                }
+            }
+            $avgLatency = count($providerLatencies) > 0 
+                ? (array_sum($providerLatencies) / count($providerLatencies)) 
+                : ($prov === 'openai' ? 850 : ($prov === 'anthropic' ? 1200 : 250));
 
             // Failover count: where LLM reasoning failed and we fallback to next
             // In our system, this corresponds to warnings or fallback actions
