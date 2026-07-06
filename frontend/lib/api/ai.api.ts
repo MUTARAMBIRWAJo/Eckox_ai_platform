@@ -107,20 +107,26 @@ export class AIAPI {
             if (data === '[DONE]') return;
             if (data === '[ERROR]') throw new Error('Stream error from server');
             if (data) {
+              let parsedError: string | null = null;
               try {
                 const parsed = JSON.parse(data);
                 if (parsed.text) {
                   yield parsed.text;
+                  continue;
                 } else if (parsed.error) {
-                  throw new Error(parsed.error);
+                  parsedError = parsed.error;
                 } else {
                   yield data;
+                  continue;
                 }
-              } catch (e: any) {
-                if (e.message && (e.message.includes('API key') || e.message.includes('Stream error'))) {
-                  throw e;
-                }
+              } catch (e) {
+                // Not JSON, yield raw data
                 yield data;
+                continue;
+              }
+
+              if (parsedError) {
+                throw new Error(parsedError);
               }
             }
           }

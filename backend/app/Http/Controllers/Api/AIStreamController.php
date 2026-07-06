@@ -58,11 +58,88 @@ class AIStreamController extends Controller
                 return;
             }
 
+            $startedAt = microtime(true);
+
             try {
                 $provider = $this->llmRouter->getProvider($providerName);
                 $state = new \App\Services\AI\AgentState('stream-' . uniqid());
 
-                $generator = $provider->stream($messages, $state);
+                // 1. Retrieve the last user message to run RAG
+                $lastUserMessage = '';
+                foreach (array_reverse($messages) as $m) {
+                    if (($m['role'] ?? '') === 'user') {
+                        $lastUserMessage = $m['content'] ?? '';
+                        break;
+                    }
+                }
+
+                // 2. Detect region and language using AIContextBuilderService
+                $contextBuilder = app(\App\Services\AI\AIContextBuilderService::class);
+                $region = 'africa'; // default
+                $language = 'en'; // default
+
+                $user = $request->user();
+                if ($user) {
+                    $lead = \App\Models\Lead::where('email', $user->email)->first();
+                    if ($lead && $lead->region) {
+                        $region = $lead->region;
+                    }
+                }
+
+                $lowerContent = mb_strtolower($lastUserMessage);
+                if (str_contains($lowerContent, 'kenya') || str_contains($lowerContent, 'africa')) {
+                    $region = 'africa';
+                } elseif (str_contains($lowerContent, 'europe') || str_contains($lowerContent, 'france') || str_contains($lowerContent, 'germany')) {
+                    $region = 'europe';
+                }
+
+                $language = $contextBuilder->detectLanguage($lastUserMessage);
+
+                // 3. Retrieve grounded RAG context
+                $redacted = preg_replace('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/', '[REDACTED_EMAIL]', $lastUserMessage);
+                $redacted = preg_replace('/(?:\+?\d{1,4}[-.\s]?)?\(?\d{1,4}\)?(?:[-.\s]?\d{1,4}){3,6}/', '[REDACTED_PHONE]', $redacted);
+
+                $retrievalContext = \App\Services\AI\RetrievalContext::buildKbOnly($redacted, $region, $language);
+                $passages = $retrievalContext->passages;
+
+                $products = \App\Models\Product::all()->filter(function ($product) use ($lowerContent) {
+                    return mb_strpos($lowerContent, mb_strtolower($product->name)) !== false
+                        || mb_strpos($lowerContent, mb_strtolower($product->sku)) !== false
+                        || (mb_strpos($lowerContent, 'hplc') !== false && mb_strpos(mb_strtolower($product->name), 'hplc') !== false);
+                });
+
+                $groundedContextText = '';
+                if (!empty($passages)) {
+                    $groundedContextText .= "Knowledge Base Passages:\n";
+                    foreach ($passages as $p) {
+                        $groundedContextText .= "- [" . $p['doc_type'] . "] " . $p['content'] . "\n";
+                    }
+                }
+                if ($products->isNotEmpty()) {
+                    $groundedContextText .= "\nProduct Catalog:\n";
+                    foreach ($products as $p) {
+                        $price = $region === 'europe' ? $p->price_eur . ' EUR' : $p->price_usd . ' USD';
+                        $groundedContextText .= "- Name: {$p->name} | SKU: {$p->sku} | Price: {$price} | Stock: {$p->stock_level}\n";
+                    }
+                }
+
+                // 4. Construct grounded system prompt
+                $systemPrompt = "You are a helpful B2B sales assistant for EckoX AI Platform.\n";
+                $systemPrompt .= "You must adhere to the following rules:\n";
+                $systemPrompt .= "1. NO-HALLUCINATION RULE: Only state prices, specifications, delivery dates, or compliance certificates that are explicitly mentioned in the Grounded Retrieval Context below. If the information is not present, politely say you will confirm with the team and follow up.\n";
+                $systemPrompt .= "2. Ground your response in the provided context. If the user asks about products, certificates, or delivery, rely only on the Grounded Retrieval Context.\n";
+                $systemPrompt .= "3. Respond in a natural conversational tone, direct and helpful, in language: {$language}.\n\n";
+                $systemPrompt .= "GROUNDED RETRIEVAL CONTEXT:\n";
+                if (empty($groundedContextText)) {
+                    $systemPrompt .= "No grounded context is available for this query.\n";
+                } else {
+                    $systemPrompt .= $groundedContextText . "\n";
+                }
+
+                $messagesWithSystem = $messages;
+                array_unshift($messagesWithSystem, ['role' => 'system', 'content' => $systemPrompt]);
+
+                $generator = $provider->stream($messagesWithSystem, $state);
 
                 $fullReply = '';
                 foreach ($generator as $chunk) {
@@ -84,12 +161,81 @@ class AIStreamController extends Controller
                 } else {
                     echo "data: [DONE]\n\n";
                 }
+
+                // Log observability metrics to database
+                try {
+                    $user = $request->user();
+                    $lead = $user ? \App\Models\Lead::where('email', $user->email)->first() : null;
+                    
+                    $promptCharCount = strlen(json_encode($messagesWithSystem));
+                    $completionCharCount = strlen($fullReply);
+                    $promptTokens = (int) ceil($promptCharCount / 4.0);
+                    $completionTokens = (int) ceil($completionCharCount / 4.0);
+                    
+                    $cost = 0.0;
+                    if ($providerName === 'groq') {
+                        $cost = (($promptTokens * 0.59) + ($completionTokens * 0.79)) / 1_000_000.0;
+                    } elseif ($providerName === 'openai') {
+                        $cost = (($promptTokens * 0.15) + ($completionTokens * 0.60)) / 1_000_000.0;
+                    } elseif ($providerName === 'anthropic') {
+                        $cost = (($promptTokens * 3.0) + ($completionTokens * 15.0)) / 1_000_000.0;
+                    }
+
+                    $latency = (int) round((microtime(true) - $startedAt) * 1000);
+
+                    \App\Models\AiActionsLog::create([
+                        'trace_id' => $state->traceId,
+                        'lead_id' => $lead?->id,
+                        'node_path' => ['rag_retrieval', 'llm_reasoning', 'guardrail_validation'],
+                        'latency_ms' => ['llm_reasoning' => $latency],
+                        'llm_provider' => $providerName,
+                        'provider' => $providerName,
+                        'model_name' => $provider->model(),
+                        'tokens_prompt' => $promptTokens,
+                        'tokens_completion' => $completionTokens,
+                        'cost_usd' => $cost,
+                        'total_latency_ms' => $latency,
+                        'intent' => 'general',
+                        'decision_type' => 'reply',
+                    ]);
+                } catch (\Throwable $logEx) {
+                    \Illuminate\Support\Facades\Log::channel('production')->warning('Failed to write stream observability log', [
+                        'error' => $logEx->getMessage()
+                    ]);
+                }
+
                 if (ob_get_level() > 0) {
                     ob_flush();
                 }
                 flush();
             } catch (\Throwable $e) {
-                echo "data: " . json_encode(['error' => $e->getMessage()]) . "\n\n";
+                \Illuminate\Support\Facades\Log::channel('production')->error("Stream execution crashed", [
+                    'exception' => $e->getMessage(),
+                ]);
+
+                // Create human escalation record in AI decisions table so a support rep is assigned
+                try {
+                    $user = $request->user();
+                    $lead = $user ? \App\Models\Lead::where('email', $user->email)->first() : null;
+                    
+                    \App\Models\AiDecision::create([
+                        'id'            => (string) \Illuminate\Support\Str::uuid(),
+                        'lead_id'       => $lead?->id,
+                        'trace_id'      => 'stream-err-' . uniqid(),
+                        'intent'        => 'general',
+                        'region'        => $lead?->region ?? 'africa',
+                        'decision_type' => 'escalate',
+                        'confidence'    => 1.0,
+                        'prompt'        => ['messages' => $messages],
+                        'response'      => ['error' => $e->getMessage(), 'escalate' => true],
+                    ]);
+                } catch (\Throwable $escalationEx) {
+                    \Illuminate\Support\Facades\Log::channel('production')->critical('Stream failsafe unable to create DB escalation record', [
+                        'error' => $escalationEx->getMessage(),
+                    ]);
+                }
+
+                echo "data: " . json_encode(['error' => 'Our AI assistant is temporarily unavailable. A human agent will respond shortly.']) . "\n\n";
                 if (ob_get_level() > 0) {
                     ob_flush();
                 }
