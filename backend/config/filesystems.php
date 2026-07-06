@@ -47,7 +47,13 @@ return [
             'report' => false,
         ],
 
-        's3' => [
+        's3' => empty(env('AWS_ACCESS_KEY_ID')) ? [
+            'driver' => 'local',
+            'root' => storage_path('app/public'),
+            'url' => env('APP_URL', 'http://127.0.0.1:8000') . '/storage',
+            'visibility' => 'public',
+            'throw' => true,
+        ] : [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
             'secret' => env('AWS_SECRET_ACCESS_KEY'),
