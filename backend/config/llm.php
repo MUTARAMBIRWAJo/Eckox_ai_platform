@@ -45,8 +45,8 @@ return [
             'vision'    => env('OPENAI_VISION_MODEL', 'gpt-4o'),
         ],
         'anthropic' => [
-            'chat' => env('ANTHROPIC_CHAT_MODEL', 'claude-3-5-sonnet-20241022'),
-            'fast' => env('ANTHROPIC_FAST_MODEL', 'claude-3-haiku-20240307'),
+            'chat' => env('ANTHROPIC_CHAT_MODEL', 'claude-sonnet-5'),
+            'fast' => env('ANTHROPIC_FAST_MODEL', 'claude-haiku-4-5-20251001'),
         ],
         'groq' => [
             'chat' => env('GROQ_CHAT_MODEL', 'llama-3.3-70b-versatile'),
@@ -128,6 +128,8 @@ return [
             'text-embedding-3-large'  => ['input' => 0.130,  'output' => 0.000],
         ],
         'anthropic' => [
+            'claude-sonnet-5'            => ['input' => 3.000,  'output' => 15.000],
+            'claude-haiku-4-5-20251001'  => ['input' => 0.250,  'output' => 1.250],
             'claude-3-5-sonnet-20241022' => ['input' => 3.000,  'output' => 15.000],
             'claude-3-haiku-20240307'    => ['input' => 0.250,  'output' => 1.250],
             'claude-3-opus-20240229'     => ['input' => 15.000, 'output' => 75.000],
