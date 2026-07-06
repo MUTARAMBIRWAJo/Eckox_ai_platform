@@ -68,7 +68,9 @@ class AIStreamController extends Controller
                 foreach ($generator as $chunk) {
                     $fullReply .= $chunk;
                     echo "data: " . json_encode(['text' => $chunk]) . "\n\n";
-                    ob_flush();
+                    if (ob_get_level() > 0) {
+                        ob_flush();
+                    }
                     flush();
                 }
 
@@ -82,11 +84,15 @@ class AIStreamController extends Controller
                 } else {
                     echo "data: [DONE]\n\n";
                 }
-                ob_flush();
+                if (ob_get_level() > 0) {
+                    ob_flush();
+                }
                 flush();
             } catch (\Throwable $e) {
                 echo "data: " . json_encode(['error' => $e->getMessage()]) . "\n\n";
-                ob_flush();
+                if (ob_get_level() > 0) {
+                    ob_flush();
+                }
                 flush();
             }
         });
