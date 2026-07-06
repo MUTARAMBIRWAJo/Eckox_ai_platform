@@ -62,7 +62,7 @@ class AIStreamController extends Controller
 
             try {
                 $provider = $this->llmRouter->getProvider($providerName);
-                $state = new \App\Services\AI\AgentState('stream-' . uniqid());
+                $state = new \App\Services\AI\AgentState((string) \Illuminate\Support\Str::uuid());
 
                 // 1. Retrieve the last user message to run RAG
                 $lastUserMessage = '';
@@ -221,7 +221,7 @@ class AIStreamController extends Controller
                     \App\Models\AiDecision::create([
                         'id'            => (string) \Illuminate\Support\Str::uuid(),
                         'lead_id'       => $lead?->id,
-                        'trace_id'      => 'stream-err-' . uniqid(),
+                        'trace_id'      => $state->traceId,
                         'intent'        => 'general',
                         'region'        => $lead?->region ?? 'africa',
                         'decision_type' => 'escalate',
