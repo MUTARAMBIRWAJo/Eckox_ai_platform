@@ -18,6 +18,10 @@ Route::get('/health', function () {
     ], $code);
 });
 
+use App\Http\Controllers\Api\HealthController;
+Route::get('/health/ai', [HealthController::class, 'health']);
+
+
 
 use App\Http\Controllers\Api\AIChatController;
 use App\Http\Controllers\Api\AuthController;
@@ -34,7 +38,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
-    Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/login', [AuthController::class, 'login'])->name('login');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
@@ -53,7 +57,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/leads/{id}/activity', [LeadController::class, 'logActivity']);
 
     // ── AI Chat Streaming ──────────────────────────────────────────────────────
-    Route::post('/ai/chat/stream', [AIChatController::class, 'stream'])->middleware('throttle:ai_streaming');
+    Route::post('/ai/chat/stream', [\App\Http\Controllers\Api\AIStreamController::class, 'stream'])->middleware('throttle:ai_streaming');
 
     // ── Escalation Queue ───────────────────────────────────────────────────────
     Route::get('/escalations', [EscalationController::class, 'index']);
@@ -81,6 +85,14 @@ Route::middleware('auth:sanctum')->group(function () {
     // ── Dashboard Stats & Provider Health ─────────────────────────────────────
     Route::get('/dashboard/stats', [DashboardStatsController::class, 'stats']);
     Route::get('/dashboard/provider-health', [DashboardStatsController::class, 'providerHealth']);
+
+    // ── Route aliases for frontend compatibility ───────────────────────────────
+    // Frontend calls /ai/provider-health and /ai/escalations (legacy paths)
+    Route::get('/ai/provider-health', [DashboardStatsController::class, 'providerHealth']);
+    Route::get('/ai/escalations', [EscalationController::class, 'index']);
+    Route::post('/ai/escalations/{traceId}/takeover', [EscalationController::class, 'takeover']);
+
+
 
     // ── Marketing Approvals ────────────────────────────────────────────────────
     Route::get('/marketing-approvals', [MarketingApprovalController::class, 'index']);
