@@ -81,5 +81,57 @@ class DatabaseSeeder extends Seeder
             // Assign default sales-agent role to the seeded test users
             $createdUser->assignRole($salesAgentRole);
         }
+
+        // 4. Seed Products
+        \App\Models\Product::firstOrCreate([
+            'sku' => 'EX-HPLC-700'
+        ], [
+            'name' => 'EckoX Pro HPLC',
+            'price_eur' => 8500.00,
+            'price_usd' => 9200.00,
+            'stock_level' => 12,
+        ]);
+
+        \App\Models\Product::firstOrCreate([
+            'sku' => 'SKU-PROC-X'
+        ], [
+            'name' => 'Eckox Processor X',
+            'price_eur' => 800.00,
+            'price_usd' => 900.00,
+            'stock_level' => 15,
+            'spec_processor' => '8-core 3.5GHz',
+            'spec_ram' => '16GB',
+            'spec_storage' => '512GB SSD',
+        ]);
+
+        // 5. Seed KnowledgeBase entries
+        \App\Models\KnowledgeBase::firstOrCreate([
+            'region' => 'africa',
+            'doc_type' => 'compliance',
+            'product_category' => 'hplc',
+        ], [
+            'content' => 'HPLC systems shipped to Kenya comply with KeBS (Kenya Bureau of Standards) certificate of conformity, ISO 9001 quality management, and CE compliance standards.',
+            'effective_date' => '2026-01-01',
+            'is_active' => true,
+        ]);
+
+        \App\Models\KnowledgeBase::firstOrCreate([
+            'region' => 'africa',
+            'doc_type' => 'sla',
+        ], [
+            'content' => 'Hardware delivery SLA inside Africa is 15 business days.',
+            'effective_date' => '2026-01-01',
+            'is_active' => true,
+        ]);
+
+        \App\Models\KnowledgeBase::firstOrCreate([
+            'region' => 'europe',
+            'doc_type' => 'compliance',
+            'product_category' => 'hardware',
+        ], [
+            'content' => 'Eckox Processor X complies with CE marking, ISO 17025, and GDPR regulations.',
+            'effective_date' => '2026-01-01',
+            'is_active' => true,
+        ]);
     }
 }
